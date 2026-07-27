@@ -28,8 +28,8 @@ def test_full_pipeline():
     assert "gsr_raw" in packets[0]
     assert "imu_ax" in packets[0]
     print("  [OK] Generator OK.")
-    
-    # 2. Test BioSignal Preprocessor
+
+    # 2. Test BioSignal Preprocessor (NeuroKit2 23 Features)
     print("[2/5] Testing Bio-Signal Preprocessor...")
     preprocessor = BioSignalPreprocessor()
     processed = preprocessor.process_batch(packets)
@@ -38,22 +38,18 @@ def test_full_pipeline():
     assert "scl_mean" in processed
     assert "scr_count" in processed
     assert "activity_index" in processed
-    print(f"  [OK] Preprocessor OK (BPM={processed['bpm']}, HRV={processed['rmssd']}ms, SCL={processed['scl_mean']}uS).")
+    assert "feature_df" in processed
+    assert processed["feature_df"].shape[1] == 23
+    print(f"  [OK] Preprocessor OK (23 WESAD Features Extracted, BPM={processed['bpm']}, HRV={processed['rmssd']}ms, SCL={processed['scl_mean']}uS).")
 
-    # 3. Test Model Classifier
+    # 3. Test Model Classifier (CatBoost / WESAD Interface)
     print("[3/5] Testing Stress Model Classifier...")
     classifier = StressClassifier()
-    result = classifier.predict({
-        "rmssd": processed["rmssd"],
-        "scl_mean": processed["scl_mean"],
-        "scr_count": processed["scr_count"],
-        "activity_index": processed["activity_index"],
-        "bpm": processed["bpm"]
-    })
-    assert result["label"] in ["RELAXED", "LOW_STRESS", "MODERATE_STRESS", "HIGH_STRESS"]
+    result = classifier.predict(processed["feature_df"])
+    assert result["label"] in ["STRESS", "NON-STRESS", "RELAXED", "LOW_STRESS", "MODERATE_STRESS", "HIGH_STRESS"]
     assert 0.0 <= result["confidence"] <= 1.0
     assert 0.0 <= result["stress_score"] <= 100.0
-    print(f"  [OK] Stress Classifier OK (State={result['label']}, Score={result['stress_score']}, Conf={result['confidence']}).")
+    print(f"  [OK] Stress Classifier OK (State={result['label']}, Score={result['stress_score']}%, Conf={result['confidence_pct']}%).")
 
     # 4. Test Data Logger
     print("[4/5] Testing CSV Data Logger...")

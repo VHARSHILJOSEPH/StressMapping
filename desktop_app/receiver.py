@@ -8,6 +8,13 @@ from collections import deque
 from typing import Dict, Any, List, Optional
 import config
 
+try:
+    import serial
+    SERIAL_AVAILABLE = True
+except ImportError:
+    SERIAL_AVAILABLE = False
+
+
 class SimulatedDataGenerator:
     """Generates synthetic PPG, GSR, and IMU bio-signals for hardware-free testing."""
     def __init__(self, sampling_rate_hz: float = config.SAMPLING_RATE_HZ):
@@ -63,8 +70,8 @@ class SimulatedDataGenerator:
 
 
 class UDPDataReceiver:
-    """Threaded UDP socket receiver with live metrics & simulation fallback."""
-    def __init__(self, host: str = config.UDP_HOST, port: int = config.UDP_PORT, maxlen: int = 1000):
+    """Threaded Receiver supporting Live UDP Wi-Fi, Serial COM, and Synthetic Simulation Modes."""
+    def __init__(self, host: str = config.UDP_HOST, port: int = config.UDP_PORT, maxlen: int = 1500):
         self.host = host
         self.port = port
         self.maxlen = maxlen
@@ -73,7 +80,11 @@ class UDPDataReceiver:
         self.lock = threading.Lock()
 
         self.running = False
+        self.connection_mode = "SIMULATION"  # "UDP", "SERIAL", "SIMULATION"
         self.simulation_mode = False
+        self.serial_port_name = config.SERIAL_PORT
+        self.baud_rate = config.BAUD_RATE
+
         self.thread: Optional[threading.Thread] = None
         self.sim_generator = SimulatedDataGenerator()
 
@@ -92,17 +103,20 @@ class UDPDataReceiver:
         if len(self.logs) > 100:
             self.logs.pop(0)
 
-    def start(self, simulation_mode: bool = False):
-        """Start the receiver daemon thread."""
+    def start(self, mode: str = "UDP", serial_port: str = config.SERIAL_PORT, baud_rate: int = config.BAUD_RATE):
+        """Start the receiver daemon thread in specified mode ('UDP', 'SERIAL', 'SIMULATION')."""
         if self.running:
-            return
+            self.stop()
 
-        self.simulation_mode = simulation_mode
+        self.connection_mode = mode.upper()
+        self.simulation_mode = (self.connection_mode == "SIMULATION")
+        self.serial_port_name = serial_port
+        self.baud_rate = baud_rate
         self.running = True
+
         self.thread = threading.Thread(target=self._run_loop, daemon=True)
         self.thread.start()
-        mode_str = "Simulated Mode" if simulation_mode else f"Live UDP Mode ({self.host}:{self.port})"
-        self.log(f"Data Receiver started in {mode_str}.")
+        self.log(f"Data Receiver started in {self.connection_mode} mode.")
 
     def stop(self):
         """Stop the receiver daemon thread."""
@@ -113,12 +127,17 @@ class UDPDataReceiver:
         self.log("Data Receiver stopped.")
 
     def set_simulation_mode(self, enabled: bool):
-        self.simulation_mode = enabled
-        self.log(f"Simulation mode switched to: {enabled}")
+        if enabled:
+            self.start(mode="SIMULATION")
+        else:
+            self.start(mode="UDP")
 
     def _run_loop(self):
         sock = None
-        if not self.simulation_mode:
+        ser = None
+        packet_counter = 0
+
+        if self.connection_mode == "UDP":
             try:
                 sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
                 sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -127,20 +146,69 @@ class UDPDataReceiver:
                 self.status = "LISTENING"
                 self.log(f"UDP Socket bound to {self.host}:{self.port}")
             except Exception as e:
-                self.log(f"Socket Binding Error: {e}. Falling back to Simulation Mode.")
-                self.simulation_mode = True
+                self.log(f"UDP Socket Binding Error: {e}. Falling back to Simulation.")
+                self.connection_mode = "SIMULATION"
+
+        elif self.connection_mode == "SERIAL":
+            if not SERIAL_AVAILABLE:
+                self.log("pyserial module not available. Falling back to Simulation.")
+                self.connection_mode = "SIMULATION"
+            else:
+                try:
+                    ser = serial.Serial(self.serial_port_name, self.baud_rate, timeout=1)
+                    time.sleep(1.0)
+                    self.status = "CONNECTED"
+                    self.last_remote_ip = f"Serial ({self.serial_port_name})"
+                    self.log(f"Serial port connected: {self.serial_port_name} @ {self.baud_rate}")
+                except Exception as e:
+                    self.log(f"Serial Port Error ({self.serial_port_name}): {e}. Falling back to Simulation.")
+                    self.connection_mode = "SIMULATION"
 
         rate_calc_time = time.time()
         rate_counter = 0
 
         while self.running:
             packet = None
-            if self.simulation_mode:
+
+            if self.connection_mode == "SIMULATION":
                 packet = self.sim_generator.generate_packet()
                 self.status = "SIMULATED"
                 self.last_remote_ip = "127.0.0.1 (Simulated)"
                 time.sleep(1.0 / config.SAMPLING_RATE_HZ)
-            else:
+
+            elif self.connection_mode == "SERIAL" and ser:
+                try:
+                    if ser.in_waiting > 0:
+                        line = ser.readline().decode('utf-8', errors='ignore').strip()
+                        if line:
+                            # Format check 1: JSON payload
+                            if line.startswith('{') and line.endswith('}'):
+                                packet = json.loads(line)
+                                packet["mode"] = "SERIAL"
+                            else:
+                                # Format check 2: Comma separated values (gsr, ax, ay, az, ppg)
+                                parts = line.split(',')
+                                if len(parts) >= 5:
+                                    packet_counter += 1
+                                    packet = {
+                                        "device_id": f"ESP32_SERIAL_{self.serial_port_name}",
+                                        "timestamp_ms": int(time.time() * 1000),
+                                        "packet_counter": packet_counter,
+                                        "gsr_raw": float(parts[0]),
+                                        "imu_ax": float(parts[1]),
+                                        "imu_ay": float(parts[2]),
+                                        "imu_az": float(parts[3]),
+                                        "ppg_raw": float(parts[4]),
+                                        "imu_gx": 0.0, "imu_gy": 0.0, "imu_gz": 0.0,
+                                        "status": "CONNECTED",
+                                        "mode": "SERIAL"
+                                    }
+                    else:
+                        time.sleep(0.01)
+                except Exception as e:
+                    time.sleep(0.01)
+
+            elif self.connection_mode == "UDP" and sock:
                 try:
                     data, addr = sock.recvfrom(2048)
                     payload_str = data.decode("utf-8", errors="ignore")
@@ -149,12 +217,9 @@ class UDPDataReceiver:
                     self.last_remote_ip = addr[0]
                     self.status = "CONNECTED"
                 except socket.timeout:
-                    # Timeout is normal when waiting for packets
                     pass
-                except json.JSONDecodeError as e:
-                    self.log(f"Malformed JSON packet received: {e}")
                 except Exception as e:
-                    self.log(f"UDP Receiver error: {e}")
+                    pass
 
             if packet:
                 with self.lock:
@@ -174,8 +239,13 @@ class UDPDataReceiver:
                 sock.close()
             except Exception:
                 pass
+        if ser:
+            try:
+                ser.close()
+            except Exception:
+                pass
 
-    def get_latest_data(self, count: int = 250) -> List[Dict[str, Any]]:
+    def get_latest_data(self, count: int = 750) -> List[Dict[str, Any]]:
         """Thread-safe retrieval of latest N packets."""
         with self.lock:
             items = list(self.buffer)
@@ -187,7 +257,9 @@ class UDPDataReceiver:
             "packets_received": self.packets_received,
             "rate_hz": self.current_rate_hz,
             "last_remote_ip": self.last_remote_ip,
-            "simulation_mode": self.simulation_mode,
+            "simulation_mode": (self.connection_mode == "SIMULATION"),
+            "connection_mode": self.connection_mode,
             "port": self.port,
+            "serial_port": self.serial_port_name,
             "last_packet_time": self.last_packet_time
         }

@@ -1,139 +1,142 @@
+import os
+import joblib
+import pandas as pd
 import numpy as np
-from typing import Dict, Any, Tuple
+from typing import Dict, Any, Tuple, Optional
 from collections import deque
 import config
 
+try:
+    from catboost import CatBoostClassifier
+    CATBOOST_AVAILABLE = True
+except ImportError:
+    CATBOOST_AVAILABLE = False
+
+
 class StressClassifier:
-    """Stress state inference engine combining HRV, EDA, and Motion features.
-    
-    Includes a modular architecture allowing researchers to easily plug in a custom
-    trained Scikit-Learn or ONNX machine learning model.
-    """
+    """Inference engine loading CatBoost WESAD Model (wesad_model.cbm) & Scaler (scaler.pkl)."""
 
-    STRESS_LABELS = {
-        0: "RELAXED",
-        1: "LOW_STRESS",
-        2: "MODERATE_STRESS",
-        3: "HIGH_STRESS"
-    }
+    def __init__(self, model_path: str = str(config.MODEL_PATH), scaler_path: str = str(config.SCALER_PATH)):
+        self.model_path = model_path
+        self.scaler_path = scaler_path
+        self.model = None
+        self.scaler = None
+        self.model_loaded = False
+        self.history = deque(maxlen=20)
 
-    def __init__(self):
-        self.custom_model = None
-        self.history = deque(maxlen=20)  # History buffer for trend calculation
+        self.load_model_and_scaler()
 
-    def load_custom_model(self, model_path: str) -> bool:
-        """Modular placeholder for loading a trained scikit-learn / joblib model file."""
+    def load_model_and_scaler(self) -> bool:
+        """Loads CatBoost model and Joblib scaler from disk if available."""
         try:
-            import joblib
-            self.custom_model = joblib.load(model_path)
-            return True
+            if os.path.exists(self.scaler_path):
+                self.scaler = joblib.load(self.scaler_path)
+
+            if CATBOOST_AVAILABLE and os.path.exists(self.model_path):
+                self.model = CatBoostClassifier()
+                self.model.load_model(self.model_path)
+                self.model_loaded = True
+                print(f"[ModelInference] CatBoost model loaded successfully from {self.model_path}")
+                return True
+            else:
+                self.model_loaded = False
+                return False
         except Exception as e:
-            print(f"[ModelInference] Custom model load notice: {e}")
+            print(f"[ModelInference] Model load notice: {e}")
+            self.model_loaded = False
             return False
 
-    def predict(self, features: Dict[str, Any]) -> Dict[str, Any]:
-        """Perform stress state classification based on multi-modal sensor features."""
-        rmssd = features.get("rmssd", 35.0)
-        scl_mean = features.get("scl_mean", 3.5)
-        scr_count = features.get("scr_count", 0)
-        activity_index = features.get("activity_index", 0.05)
-        bpm = features.get("bpm", 72.0)
-
-        # Feature vector for ML model insertion: [RMSSD, SCL, SCR_COUNT, ACTIVITY, BPM]
-        feature_vector = np.array([[rmssd, scl_mean, scr_count, activity_index, bpm]])
-
-        if self.custom_model is not None:
-            try:
-                pred_code = int(self.custom_model.predict(feature_vector)[0])
-                label = self.STRESS_LABELS.get(pred_code, "UNKNOWN")
-                probs = self.custom_model.predict_proba(feature_vector)[0]
-                confidence = float(np.max(probs))
-                stress_score = float(pred_code * 33.3)
-                return self._format_result(label, confidence, stress_score)
-            except Exception:
-                pass  # Fall back to heuristic rule engine
-
-        # Heuristic Biomedical Research Inference Model
-        # High Stress Indicator: Low HRV (RMSSD < 25ms), Elevated SCL (>5 uS) or frequent SCR spikes, higher heart rate
-        # Motion Artifact Guard: If activity index > 0.5, downgrade stress confidence to avoid misclassifying physical exercise
-        
-        stress_score = 0.0
-        
-        # HRV component (Lower RMSSD = Higher Stress)
-        if rmssd < 20.0:
-            stress_score += 40.0
-        elif rmssd < 30.0:
-            stress_score += 25.0
-        elif rmssd < 45.0:
-            stress_score += 10.0
-
-        # GSR SCL component (Higher Conductance = Higher Stress)
-        if scl_mean > 6.0:
-            stress_score += 35.0
-        elif scl_mean > 4.5:
-            stress_score += 20.0
-        elif scl_mean > 3.5:
-            stress_score += 10.0
-
-        # GSR SCR spikes component
-        stress_score += min(25.0, scr_count * 8.0)
-
-        # Cap stress score at 100.0
-        stress_score = min(100.0, stress_score)
-
-        # Classify into state labels
-        if stress_score < 25.0:
-            label = "RELAXED"
-            confidence = 0.92 - (stress_score / 250.0)
-        elif stress_score < 50.0:
-            label = "LOW_STRESS"
-            confidence = 0.85
-        elif stress_score < 75.0:
-            label = "MODERATE_STRESS"
-            confidence = 0.88
+    def predict(self, feature_input: Any) -> Dict[str, Any]:
+        """Runs inference on 23-feature DataFrame using Scaler and CatBoostClassifier."""
+        # Convert dict or DataFrame to exact 23-feature DataFrame
+        if isinstance(feature_input, pd.DataFrame):
+            feat_df = feature_input
+        elif isinstance(feature_input, dict) and "feature_df" in feature_input:
+            feat_df = feature_input["feature_df"]
         else:
-            label = "HIGH_STRESS"
-            confidence = 0.94
+            # Construct single-row DataFrame from dict values
+            rmssd = feature_input.get("rmssd", 35.0)
+            scl_mean = feature_input.get("scl_mean", 3.5)
+            scr_count = feature_input.get("scr_count", 0)
+            activity_index = feature_input.get("activity_index", 0.05)
+            bpm = feature_input.get("bpm", 72.0)
 
-        # Motion adjustment: physical motion affects autonomic signals
-        if activity_index > 0.4:
-            confidence = max(0.40, confidence - 0.25)
+            feat_df = pd.DataFrame([{
+                "eda_mean": scl_mean, "eda_std": 0.5, "eda_slope": 0.0,
+                "scl_mean": scl_mean, "phasic_mean": 0.0, "scr_count": scr_count,
+                "scr_amp_mean": 0.0, "scr_rise_mean": 0.0, "scr_recovery_mean": 0.0,
+                "hr": bpm, "rmssd": rmssd, "sdnn": 40.0, "pnn50": 15.0,
+                "ibi_mean": 20.0, "ibi_std": 2.0, "imu_mag_mean": 1.0,
+                "imu_mag_std": activity_index, "imu_energy": 1.0,
+                "imu_jerk_mean": 0.0, "imu_jerk_std": 0.0,
+                "imu_var_x": 0.01, "imu_var_y": 0.01, "imu_var_z": 0.01
+            }])[config.FEATURE_COLS]
 
-        # Record history for trend computation
+        # 1. CatBoost Inference if Model & Scaler are loaded
+        if self.model_loaded and self.model is not None:
+            try:
+                feat_scaled = self.scaler.transform(feat_df) if self.scaler is not None else feat_df
+                pred_raw = self.model.predict(feat_scaled)
+                prediction = int(pred_raw[0]) if isinstance(pred_raw, (list, np.ndarray)) else int(pred_raw)
+                
+                probs = self.model.predict_proba(feat_scaled)[0]
+                confidence = float(np.max(probs))
+
+                state = "STRESS" if prediction == 1 else "NON-STRESS"
+                stress_score = float(probs[1] * 100.0) if len(probs) > 1 else (100.0 if prediction == 1 else 15.0)
+
+                self.history.append(stress_score)
+                trend = self._calculate_trend()
+
+                return {
+                    "label": state,
+                    "prediction": prediction,
+                    "confidence": round(confidence, 3),
+                    "confidence_pct": round(confidence * 100.0, 1),
+                    "stress_score": round(stress_score, 1),
+                    "trend": trend,
+                    "model_source": "CatBoost WESAD Model (.cbm)"
+                }
+            except Exception as e:
+                print(f"[ModelInference] CatBoost prediction fallback: {e}")
+
+        # 2. Heuristic Bio-Signal Fallback (Runs if .cbm file is not found on disk)
+        rmssd = float(feat_df["rmssd"].iloc[0]) if "rmssd" in feat_df.columns else 35.0
+        scl_mean = float(feat_df["scl_mean"].iloc[0]) if "scl_mean" in feat_df.columns else 3.5
+        scr_count = int(feat_df["scr_count"].iloc[0]) if "scr_count" in feat_df.columns else 0
+        activity_index = float(feat_df["imu_mag_std"].iloc[0]) if "imu_mag_std" in feat_df.columns else 0.05
+
+        stress_score = 15.0
+        if rmssd < 25.0: stress_score += 30.0
+        if scl_mean > 4.5: stress_score += 25.0
+        stress_score += min(30.0, scr_count * 10.0)
+        stress_score = min(100.0, max(0.0, stress_score))
+
+        prediction = 1 if stress_score >= 50.0 else 0
+        state = "STRESS" if prediction == 1 else "NON-STRESS"
+        confidence = 0.88 if prediction == 1 else 0.92
+
         self.history.append(stress_score)
         trend = self._calculate_trend()
 
         return {
-            "label": label,
-            "confidence": round(float(confidence), 2),
-            "stress_score": round(float(stress_score), 1),
+            "label": state,
+            "prediction": prediction,
+            "confidence": round(confidence, 3),
+            "confidence_pct": round(confidence * 100.0, 1),
+            "stress_score": round(stress_score, 1),
             "trend": trend,
-            "features_used": {
-                "rmssd_ms": rmssd,
-                "scl_uS": scl_mean,
-                "scr_spikes": scr_count,
-                "motion_index": activity_index,
-                "bpm": bpm
-            }
+            "model_source": "Heuristic Bio-Engine (wesad_model.cbm standby)"
         }
 
     def _calculate_trend(self) -> str:
-        if len(self.history) < 5:
-            return "STABLE"
-        recent = list(self.history)[-5:]
+        if len(self.history) < 4:
+            return "STABLE ->"
+        recent = list(self.history)[-4:]
         delta = recent[-1] - recent[0]
-        if delta > 12.0:
+        if delta > 10.0:
             return "ELEVATING ↗"
-        elif delta < -12.0:
+        elif delta < -10.0:
             return "REDUCING ↘"
         else:
             return "STABLE →"
-
-    def _format_result(self, label: str, confidence: float, score: float) -> Dict[str, Any]:
-        self.history.append(score)
-        return {
-            "label": label,
-            "confidence": round(confidence, 2),
-            "stress_score": round(score, 1),
-            "trend": self._calculate_trend()
-        }
