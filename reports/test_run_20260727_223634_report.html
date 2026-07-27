@@ -1,0 +1,152 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Stress Monitoring Session Report - test_run_20260727_223634</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+            background-color: #0d1117;
+            color: #c9d1d9;
+            margin: 0;
+            padding: 40px;
+        }
+        .container {
+            max-width: 900px;
+            margin: 0 auto;
+            background: #161b22;
+            border: 1px solid #30363d;
+            border-radius: 12px;
+            padding: 32px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.5);
+        }
+        .header {
+            border-bottom: 1px solid #30363d;
+            padding-bottom: 20px;
+            margin-bottom: 24px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .header h1 {
+            color: #58a6ff;
+            margin: 0;
+            font-size: 26px;
+        }
+        .badge {
+            background: #238636;
+            color: #ffffff;
+            padding: 6px 16px;
+            border-radius: 20px;
+            font-weight: bold;
+            font-size: 14px;
+        }
+        .grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 16px;
+            margin-bottom: 24px;
+        }
+        .card {
+            background: #21262d;
+            border: 1px solid #30363d;
+            border-radius: 8px;
+            padding: 16px;
+        }
+        .card .title {
+            font-size: 12px;
+            color: #8b949e;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+        .card .value {
+            font-size: 22px;
+            font-weight: bold;
+            color: #f0f6fc;
+            margin-top: 8px;
+        }
+        .bar-container {
+            margin-top: 20px;
+            background: #21262d;
+            border-radius: 8px;
+            padding: 16px;
+            border: 1px solid #30363d;
+        }
+        .bar-label {
+            display: flex;
+            justify-content: space-between;
+            font-size: 13px;
+            margin-bottom: 6px;
+        }
+        .bar-outer {
+            background: #30363d;
+            height: 10px;
+            border-radius: 5px;
+            overflow: hidden;
+            margin-bottom: 12px;
+        }
+        .bar-inner {
+            height: 100%;
+            border-radius: 5px;
+        }
+        .footer {
+            margin-top: 32px;
+            border-top: 1px solid #30363d;
+            padding-top: 16px;
+            font-size: 12px;
+            color: #8b949e;
+            text-align: center;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <div>
+                <h1>Bio-Signal Stress Session Report</h1>
+                <div style="color: #8b949e; font-size: 13px; margin-top: 4px;">Session ID: test_run_20260727_223634 | Generated: 2026-07-27 22:36:34</div>
+            </div>
+            <div class="badge">LOW_STRESS</div>
+        </div>
+
+        <div class="grid">
+            <div class="card">
+                <div class="title">Duration</div>
+                <div class="value">0.0 s</div>
+            </div>
+            <div class="card">
+                <div class="title">Total Packets</div>
+                <div class="value">50</div>
+            </div>
+            <div class="card">
+                <div class="title">Avg GSR Conductance</div>
+                <div class="value">4.08 &mu;S</div>
+            </div>
+            <div class="card">
+                <div class="title">Avg Motion Index</div>
+                <div class="value">0.02 g</div>
+            </div>
+        </div>
+
+        <div class="bar-container">
+            <h3 style="color: #58a6ff; margin-top: 0; font-size: 16px;">Autonomic Stress State Distribution</h3>
+            
+            <div class="bar-label"><span>Relaxed</span><span>0.0%</span></div>
+            <div class="bar-outer"><div class="bar-inner" style="width: 0.0%; background: #238636;"></div></div>
+
+            <div class="bar-label"><span>Low Stress</span><span>100.0%</span></div>
+            <div class="bar-outer"><div class="bar-inner" style="width: 100.0%; background: #2ea043;"></div></div>
+
+            <div class="bar-label"><span>Moderate Stress</span><span>0.0%</span></div>
+            <div class="bar-outer"><div class="bar-inner" style="width: 0.0%; background: #d29922;"></div></div>
+
+            <div class="bar-label"><span>High Stress</span><span>0.0%</span></div>
+            <div class="bar-outer"><div class="bar-inner" style="width: 0.0%; background: #f85149;"></div></div>
+        </div>
+
+        <div class="footer">
+            ESP32 Wearable Stress-Monitoring Research Prototype &bull; Telemetry & Analytics Platform
+        </div>
+    </div>
+</body>
+</html>
