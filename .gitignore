@@ -1,3 +1,41 @@
+# Python
 __pycache__/
-*.pyc
+*.py[cod]
+*.pyo
+
+# Virtual environment
+venv/
+.venv/
+env/
+
+# Environment / secrets
+.env
+.env.*
+!.env.example
+
+# Generated data
+data/*.csv
+data/*.json
+data/logs/
+
+# Generated reports
+reports/*.html
+reports/*.json
+reports/*.md
+reports/*.pdf
+
+# Temporary files
+temp_*.py
+found_3d.txt
+blob_*.py
+
+# IDE
+.vscode/
+.idea/
+
+# OS
 .DS_Store
+Thumbs.db
+
+# Streamlit local configuration
+.streamlit/secrets.toml

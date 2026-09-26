@@ -1,165 +1,144 @@
-# ESP32 Wearable Stress-Monitoring System
+# ESP32 Bio-Synchronous Stress Mapping System
 
-An end-to-end biomedical sensor connectivity and desktop dashboard platform built for wearable stress-monitoring research. Connects an ESP32 microcontroller over Wi-Fi, receives continuous multi-modal bio-signal telemetry, filters signals in real-time, infers autonomic stress states, logs CSV sessions, and exports session statistics reports. Includes a **Simulated Hardware Mode** allowing complete end-to-end testing even when physical ESP32 hardware is not connected.
+A robust, real-time bio-telemetry telemetry and stress mapping platform combining multi-modal biometric sensors (GSR, PPG, IMU) connected to an ESP32 microcontroller with a Python application pipeline for signal filtering, normalization, and machine learning inference.
 
 ---
 
-## 🏗️ System Architecture & Data Flow
+## 📁 Repository Structure
 
 ```
-+-----------------------------+
-| ESP32 Wearable Firmware     |
-| (PPG, GSR, IMU Sensor Stubs)|
-+--------------+--------------+
-               |
-               | Wi-Fi UDP Stream (JSON Packets @ 25Hz)
-               v
-+-----------------------------+
-| Desktop UDP Receiver        | <--- Simulated Bio-Signal Generator
-| (daemon background thread)  |      (Hardware-Free Fallback Mode)
-+--------------+--------------+
-               |
-               v
-+-----------------------------+
-| Bio-Signal Preprocessor     |
-| - PPG Bandpass Filter       |
-| - HRV RMSSD / Peak Detection|
-| - EDA/GSR SCL/SCR Filter    |
-| - IMU 3-Axis Vector Mag     |
-+--------------+--------------+
-               |
-               v
-+-----------------------------+
-| Stress Classifier Engine    | ---> Drop-in Scikit-Learn / ONNX Model Interface
-| (Autonomic Heuristics / ML) |
-+--------------+--------------+
-               |
-       +-------+-------+
-       |               |
-       v               v
-+--------------+ +--------------+
-| Streamlit UI | | CSV Logger & |
-| Dashboard    | | Report Gen   |
-+--------------+ +--------------+
+├── Firmware/
+│   └── esp32_fixed.ino         # Optimized non-blocking ESP32 firmware
+├── Python/
+│   └── app.py                  # Python telemetry reader, normalizer, & filter
+├── Models/
+│   └── weights/                # Directory for trained ML model weights (.cbm, .pkl)
+├── Data/
+│   └── logs/                   # Directory for logged telemetry data
+└── README.md                   # Complete system documentation
 ```
 
 ---
 
-## 📁 Folder Structure
+## ⚡ 1. Hardware Pin Mapping & Setup
 
-```
-e:\Epics\HARDWARE\
-├── config.py                  # Global settings, IP/port, cutoffs & paths
-├── main.py                    # Main CLI launcher & IP discovery tool
-├── requirements.txt           # Python dependencies
-├── README.md                  # System documentation
-├── esp32_firmware/
-│   └── esp32_stress_monitor.ino # ESP32 C++ Arduino sketch
-├── desktop_app/
-│   ├── __init__.py
-│   ├── receiver.py            # UDP socket receiver & synthetic signal generator
-│   ├── data_logger.py         # CSV session logger
-│   ├── preprocessing.py       # Butterworth bandpass/lowpass filters & HRV
-│   ├── model_inference.py     # Stress classification engine
-│   └── report_generator.py    # HTML & Markdown report renderer
-├── dashboard/
-│   └── streamlit_app.py       # Clinical-Tech Streamlit dashboard UI
-├── data/                      # Recorded CSV session storage
-└── reports/                   # Exported HTML/MD report storage
-```
+### ESP32 Pin Allocation
 
----
+| Sensor Component | Connection / Signal | ESP32 Pin | Voltage / Power |
+| :--- | :--- | :--- | :--- |
+| **MAX30102 (PPG)** | SDA | **GPIO 21** | 3.3V |
+| **MAX30102 (PPG)** | SCL | **GPIO 22** | 3.3V |
+| **MPU6050 (IMU)** | SDA | **GPIO 21** | 3.3V |
+| **MPU6050 (IMU)** | SCL | **GPIO 22** | 3.3V |
+| **OLED (SSD1306)** | SDA | **GPIO 21** | 3.3V |
+| **OLED (SSD1306)** | SCL | **GPIO 22** | 3.3V |
+| **GSR (Skin Resistance)** | Output | **GPIO 34** (ADC1) | 3.3V |
+| **Common Power** | VCC | **3.3V** | 3.3V |
+| **Common Ground** | GND | **GND** | 0V |
 
-## 🔌 ESP32 Hardware Wiring Guide
+> [!IMPORTANT]
+> Do not change GPIO21 or GPIO22 unless absolutely necessary. GPIO34 is an input-only ADC1 pin on the ESP32 suitable for low-noise analog readings.
 
-| Component | ESP32 Pin | Description |
-| :--- | :--- | :--- |
-| **PPG Sensor** | `GPIO 34` (ADC1_CH6) | Pulse sensor analog output |
-| **GSR / EDA Sensor** | `GPIO 35` (ADC1_CH7) | Electrodermal activity analog output |
-| **IMU (MPU6050) SDA** | `GPIO 21` (I2C SDA) | Data line for 3-axis accel/gyro |
-| **IMU (MPU6050) SCL** | `GPIO 22` (I2C SCL) | Clock line for 3-axis accel/gyro |
-| **Status LED** | `GPIO 2` | Onboard status indicator |
-| **Power** | `3.3V` / `GND` | Power rail for sensor modules |
+### Power & Wiring Guidelines
 
-*Note: If any physical sensor is missing or floating, the firmware automatically generates synthetic bio-signals so transmission is never interrupted.*
+- ✔ **3.3V Power**: All sensors must run on 3.3V.
+- ✔ **Common Ground**: Ensure a single, common GND plane across all modules and the ESP32.
+- ✔ **USB-C Direct Supply**: Power the system directly via USB-C to the ESP32. Avoid powering sensors from separate external supplies unless grounds are explicitly tied together.
+- ⚡ **I²C Pull-Up Resistors**: Only **one set** of I²C pull-up resistors should exist on the bus. If the MAX30102, MPU6050, and OLED breakout boards already feature onboard pull-ups, **do not** add external 4.7kΩ resistors.
+- 📏 **Jumper Wires**: Keep SDA lines together and SCL lines together. Ensure total jumper wire length is **< 20 cm** to minimize parasitic capacitance on the 400kHz I²C bus.
 
 ---
 
-## ⚡ Setup & Flashing Instructions
+## 💻 2. ESP32 Firmware Highlights (`Firmware/esp32_fixed.ino`)
 
-### 1. ESP32 Firmware Setup (Arduino IDE)
-1. Open `esp32_firmware/esp32_stress_monitor.ino` in Arduino IDE.
-2. Install the **ESP32 Board Package** in Arduino IDE (`Tools -> Board -> Board Manager -> esp32`).
-3. Edit the following configuration constants at the top of the file:
+1. **Proper I²C & ADC Initialization**:
    ```cpp
-   const char* WIFI_SSID     = "YOUR_WIFI_SSID";
-   const char* WIFI_PASS     = "YOUR_WIFI_PASSWORD";
-   const char* UDP_DEST_IP   = "192.168.1.100"; // Your computer's IP address
-   const uint16_t UDP_PORT   = 5005;
+   Wire.begin(21, 22);
+   Wire.setClock(400000);
+   delay(100);
+
+   analogReadResolution(12);
+   analogSetPinAttenuation(PIN_GSR, ADC_11db);
    ```
-4. Select `ESP32 Dev Module` under `Tools -> Board`, choose your COM port, and click **Upload**.
-5. Open Serial Monitor at `115200` baud to verify Wi-Fi connection and UDP packet transmission.
+
+2. **Sequential Sensor Initialization Order**:
+   `Serial.begin()` $\rightarrow$ `Wire.begin()` $\rightarrow$ `MPU6050` $\rightarrow$ `MAX30102` $\rightarrow$ `OLED` $\rightarrow$ `GSR`
+
+   Every sensor initialization is explicitly verified and logged:
+   ```
+   Initializing MPU... OK
+   Initializing MAX30102... OK
+   Initializing OLED... OK
+   Initializing GSR... OK
+   ```
+   *If any critical sensor fails to initialize, the system prints `ERROR` and halts execution (`while(1)`).*
+
+3. **Non-Blocking Multi-Rate Sampling (No `delay()` in Loop)**:
+   - **IMU**: 100 Hz (10 ms period)
+   - **PPG**: 25 Hz (40 ms period)
+   - **GSR**: 50 Hz (20 ms period)
+
+4. **16-Sample GSR Noise Averaging**:
+   ```cpp
+   int sum = 0;
+   for (int i = 0; i < 16; i++) {
+       sum += analogRead(34);
+   }
+   gsr = sum / 16;
+   ```
+
+5. **MAX30102 Setup & Warmup**:
+   - `particleSensor.setup(0x1F, 4, 2, 100, 411, 4096);`
+   - Discards readings for the first **3 seconds** after power-up while optics stabilize.
+
+6. **MPU6050 Ranges**:
+   - Accelerometer: `MPU6050_RANGE_4_G` ($\pm 4\text{g}$)
+   - Gyroscope: `MPU6050_RANGE_500_DEG` ($\pm 500^\circ/\text{s}$)
+   - DLPF Bandwidth: `MPU6050_BAND_21_HZ`
+
+7. **Unified Telemetry CSV Line Output**:
+   Outputs store-then-print telemetry per cycle:
+   ```
+   millis, gsr, ax, ay, az, gx, gy, gz, ir, red
+   ```
+   Example: `12450,1850,-0.12,0.98,9.81,0.01,-0.02,0.00,145200,148900`
 
 ---
 
-### 2. Computer Dashboard Setup (Windows)
+## 🐍 3. Python Application & AI Processing (`Python/app.py`)
 
-1. Open PowerShell or Command Prompt in the project folder:
-   ```cmd
-   cd e:\Epics\HARDWARE
-   ```
-2. Create and activate a Python virtual environment:
-   ```cmd
-   python -m venv venv
-   .\venv\Scripts\activate
-   ```
-3. Install dependencies:
-   ```cmd
-   pip install -r requirements.txt
-   ```
-4. Launch the dashboard system:
-   ```cmd
-   python main.py
-   ```
-   *`main.py` will print all local IP addresses of your computer (for your ESP32 configuration) and open the Streamlit dashboard in your web browser at `http://localhost:8501`.*
+- **Increased Serial Timeout**: Set `timeout=3` seconds for stable packet assembly.
+- **Automatic COM Port Detection**: Automatically scans system serial ports (`pyserial`) and matches ESP32 device signatures (CP210x, CH340, FTDI).
+- **Malformed Line Tolerance**: CSV line parsing is wrapped in `try...except` blocks to ignore corrupted or incomplete packets without crashing.
+- **Sliding Window Moving Averages**:
+  - **IMU**: 5-sample sliding window
+  - **PPG**: 10-sample sliding window
+  - **GSR**: 20-sample sliding window
+- **AI Signal Normalization**: Normalizes raw sensor readings prior to ML inference:
+  - GSR: $[0, 1]$ (scaled relative to 12-bit ADC max 4095)
+  - IMU Accel & Gyro: $[-1, +1]$
+  - PPG IR/Red: $[0, 1]$
 
 ---
 
-## 🧪 Testing Without Hardware (Simulated Mode)
+## ⚠️ 4. Electrical Safety Precautions
 
-1. Run `python main.py`.
-2. In the dashboard sidebar, toggle **"Simulated Hardware Mode"** to `ON`.
-3. Click **"Start Receiver"**.
-4. The dashboard will instantly visualize synthetic PPG cardiac pulses, GSR tonic/phasic fluctuations, and IMU movement dynamics.
-5. Click **"Start Session"**, record for 20-30 seconds, click **"Stop Session"**, then click **"Export Last Session Report"** to inspect generated HTML/Markdown reports in `reports/`.
-
----
-
-## 🛠️ Troubleshooting & Frequently Asked Questions
-
-### 1. UDP Receiver Not Receiving ESP32 Packets
-- **Windows Firewall**: Windows Firewall may block incoming UDP packets on port `5005`.
-  - Open PowerShell as Administrator and run:
-    ```powershell
-    New-NetFirewallRule -DisplayName "ESP32 UDP Receiver" -Direction Inbound -Protocol UDP -LocalPort 5005 -Action Allow
-    ```
-- **Wi-Fi AP Isolation**: Ensure your router does not have "AP Isolation" / "Client Isolation" enabled, which prevents Wi-Fi devices from communicating with computer hosts on the same network.
-- **Incorrect IP Address**: Run `python main.py` to confirm your computer's exact active IPv4 address on the Wi-Fi interface, and make sure `UDP_DEST_IP` in `esp32_stress_monitor.ino` matches it exactly.
-
-### 2. Streamlit Port Conflicts
-- If port `8501` is already in use, run:
-  ```cmd
-  python -m streamlit run dashboard/streamlit_app.py --server.port 8502
-  ```
+> [!CAUTION]
+> Because GSR electrodes make direct electrical contact with the human body, adhere strictly to the following safety protocols:
+> 1. **Run Laptop on Battery**: When wearing or testing GSR electrodes, operate your host computer on battery power whenever possible.
+> 2. **Disconnect Mains Equipment**: Do not connect external mains-powered instruments, oscilloscopes, or grounded chargers while electrodes are attached to a subject.
+> 3. **USB Isolation**: Keep the circuit strictly powered from the ESP32's isolated 5V/USB connection.
 
 ---
 
-## 🔮 Extending the Machine Learning Model
+## ✅ 5. Priority Checklist (Most Important Implementation Rules)
 
-To plug in your own trained `scikit-learn` or `joblib` classifier model:
-1. Save your trained model object to disk (e.g., `my_stress_model.joblib`).
-2. In `desktop_app/model_inference.py`, call:
-   ```python
-   classifier.load_custom_model("path/to/my_stress_model.joblib")
-   ```
-3. The inference engine will automatically pass the 5-feature vector `[RMSSD, SCL, SCR_COUNT, ACTIVITY, BPM]` through your model!
+- [x] **I²C Clock & Pins**: `Wire.begin(21, 22)` and `Wire.setClock(400000)`.
+- [x] **Sequential Sensor Verification**: Initialize sensors step-by-step and check every `begin()` return code.
+- [x] **ADC Setup**: Configure GPIO34 as a 12-bit ADC with `ADC_11db` attenuation.
+- [x] **Non-Blocking Loop**: Zero `delay()` calls in the telemetry loop; use `millis()` timers.
+- [x] **GSR Averaging**: Average 16 GSR ADC reads per sample cycle.
+- [x] **Single CSV Stream**: Output one CSV line per sample cycle with all metrics.
+- [x] **Error Handling**: Print clear initialization status (`OK` / `ERROR`) and halt execution if critical setup fails.
+- [x] **Short I²C Wiring**: Keep SDA/SCL lines short ($< 20\text{ cm}$) with only one set of pull-up resistors.
+- [x] **Verify Addresses**: Ensure I²C addresses match: `0x57` (MAX30102), `0x68` (MPU6050), `0x3C` (OLED).

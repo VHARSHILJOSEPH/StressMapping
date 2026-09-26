@@ -7,24 +7,44 @@ from typing import Dict, Any, Optional
 import config
 
 class SessionReportGenerator:
-    """Generates clinical research session report documents in HTML and Markdown."""
+    """Generates Mental Health Summary (MHS) session report documents in HTML and Markdown."""
 
     def __init__(self, reports_dir: Path = config.REPORTS_DIR):
         self.reports_dir = Path(reports_dir)
         self.reports_dir.mkdir(parents=True, exist_ok=True)
 
-    def generate_report_from_csv(self, csv_file_path: str) -> Dict[str, str]:
-        """Read session CSV file and compile statistical report files."""
+    def generate_report_from_csv(self, csv_file_path: str, patient_name: Optional[str] = None) -> Dict[str, str]:
+        """Read session CSV file and compile MHS statistical report files."""
         if not os.path.exists(csv_file_path):
             raise FileNotFoundError(f"CSV file not found: {csv_file_path}")
 
-        df = pd.read_csv(csv_file_path)
+        try:
+            df = pd.read_csv(csv_file_path)
+        except Exception as exc:
+            raise ValueError(f"Could not read CSV file: {exc}")
+
         if df.empty:
-            raise ValueError("CSV session file is empty.")
+            raise ValueError(f"Session CSV file '{os.path.basename(csv_file_path)}' is empty (0 samples). Please ensure data is logged before generating a report.")
 
         # Compute Session Metrics
-        session_id = df["session_id"].iloc[0] if "session_id" in df.columns else "UNKNOWN_SESSION"
+        session_id = str(df["session_id"].iloc[0]) if "session_id" in df.columns and pd.notna(df["session_id"].iloc[0]) else Path(csv_file_path).stem
         total_samples = len(df)
+
+        # Extract Patient Name
+        if not patient_name:
+            if "patient_name" in df.columns and pd.notna(df["patient_name"].iloc[0]):
+                p_val = str(df["patient_name"].iloc[0]).strip()
+                if p_val and p_val.lower() != "nan":
+                    patient_name = p_val
+
+        if not patient_name:
+            parts = session_id.rsplit("_", 2)
+            if len(parts) == 3 and len(parts[1]) == 8 and len(parts[2]) == 6 and parts[1].isdigit() and parts[2].isdigit():
+                patient_name = parts[0].replace("_", " ").title()
+            elif session_id.startswith("stress_session_"):
+                patient_name = "Anonymous"
+            else:
+                patient_name = session_id.replace("_", " ").title()
         
         # Estimate duration from ISO timestamps if available
         duration_sec = total_samples / config.SAMPLING_RATE_HZ
@@ -35,6 +55,17 @@ class SessionReportGenerator:
                 duration_sec = (t_end - t_start).total_seconds()
             except Exception:
                 pass
+
+        # Compute actual sampling rate from timestamps
+        actual_rate_hz = round(total_samples / max(duration_sec, 0.1), 1)
+
+        # Determine connection mode from data
+        mode_col = df["mode"] if "mode" in df.columns else pd.Series(["UNKNOWN"])
+        primary_mode = mode_col.mode().iloc[0] if not mode_col.empty else "UNKNOWN"
+        connection_label = "USB Serial (C-to-C)" if primary_mode == "SERIAL" else (
+            "Live UDP (Wi-Fi)" if primary_mode == "LIVE_UDP" else (
+            "Simulation" if primary_mode == "SIMULATION" else primary_mode
+        ))
 
         # Signal Statistics
         ppg_raw = df["ppg_raw"] if "ppg_raw" in df.columns else pd.Series([0])
@@ -61,9 +92,12 @@ class SessionReportGenerator:
 
         stats = {
             "session_id": session_id,
+            "patient_name": patient_name,
             "date_str": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             "duration_sec": round(duration_sec, 1),
             "total_samples": total_samples,
+            "actual_rate_hz": actual_rate_hz,
+            "connection_label": connection_label,
             "primary_state": primary_state,
             "ppg_avg": round(ppg_avg, 1),
             "ppg_std": round(ppg_std, 1),
@@ -77,17 +111,52 @@ class SessionReportGenerator:
         }
 
         # Render Output Files
-        html_path = self.reports_dir / f"{session_id}_report.html"
-        md_path = self.reports_dir / f"{session_id}_report.md"
+        html_path = self.reports_dir / f"{session_id}_mhs_report.html"
+        md_path = self.reports_dir / f"{session_id}_mhs_report.md"
+        json_path = self.reports_dir / f"{session_id}_mhs_report.json"
+        pdf_path = self.reports_dir / f"{session_id}_mhs_report.pdf"
+
+        # Generate Non-Clinical Decision Support Guidance
+        recommendations = []
+        if pct_high > 30.0:
+            recommendations.append("HIGH STRESS ALERT: Subject experienced sustained high stress >30% of session duration. Recommended: Guided breathing / VR decompression protocol.")
+        elif pct_mod + pct_high > 50.0:
+            recommendations.append("MODERATE STRESS ELEVATION: Subject displayed elevated stress >50% of session. Recommended: Adjust task difficulty or introduce rest breaks.")
+        else:
+            recommendations.append("STABLE AUTONOMIC STATE: Physiological markers remained largely within baseline/low stress range.")
+
+        if motion_avg > 1.2:
+            recommendations.append("MOTION ARTIFACT NOTICE: High average physical movement detected (>1.2g). Ensure electrodes remained securely attached.")
+
+        stats["recommendations"] = recommendations
 
         self._render_html_report(stats, html_path)
         self._render_markdown_report(stats, md_path)
+        self._render_json_report(stats, json_path)
 
-        return {
+        try:
+            from report_generator import generate_pdf_report
+            generate_pdf_report(csv_file_path, output_pdf_path=str(pdf_path), patient_name=patient_name)
+        except Exception:
+            pass
+
+        result = {
             "html_path": str(html_path),
             "md_path": str(md_path),
-            "session_id": session_id
+            "json_path": str(json_path),
+            "session_id": session_id,
+            "patient_name": patient_name,
         }
+        if pdf_path.exists():
+            result["pdf_path"] = str(pdf_path)
+
+        return result
+
+    def _render_json_report(self, stats: Dict[str, Any], output_path: Path):
+        """Export structured non-clinical decision-support data as JSON."""
+        import json
+        with open(output_path, "w", encoding="utf-8") as f:
+            json.dump(stats, f, indent=2)
 
     def _render_html_report(self, stats: Dict[str, Any], output_path: Path):
         # Determine badge color based on primary state
@@ -109,12 +178,14 @@ class SessionReportGenerator:
             badge_color = "#EF4444"
             badge_border = "rgba(239,68,68,0.3)"
 
+        disclaimer_text = "This report summarizes model-estimated physiological stress responses and signal characteristics during the recorded session. It is intended for research and non-clinical decision support and does not constitute a medical or psychiatric diagnosis."
+
         html_content = f"""<!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Stress Monitoring Session Report - {stats['session_id']}</title>
+    <title>MHS Report - {stats['session_id']}</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
@@ -197,7 +268,7 @@ class SessionReportGenerator:
         }}
         .grid {{
             display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+            grid-template-columns: repeat(auto-fit, minmax(155px, 1fr));
             gap: 14px;
             margin-bottom: 28px;
         }}
@@ -236,6 +307,11 @@ class SessionReportGenerator:
             color: #F1F5F9;
             margin-top: 8px;
             letter-spacing: -0.02em;
+        }}
+        .card .sub {{
+            font-size: 11px;
+            color: #64748B;
+            margin-top: 4px;
         }}
         .section {{
             margin-top: 28px;
@@ -286,6 +362,16 @@ class SessionReportGenerator:
             color: #F1F5F9;
             font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace;
         }}
+        .disclaimer-box {{
+            margin-top: 24px;
+            padding: 16px;
+            border-radius: 12px;
+            background: rgba(100, 116, 139, 0.1);
+            border: 1px solid rgba(100, 116, 139, 0.25);
+            font-size: 12px;
+            color: #94A3B8;
+            line-height: 1.6;
+        }}
         .footer {{
             margin-top: 36px;
             padding-top: 20px;
@@ -306,8 +392,8 @@ class SessionReportGenerator:
             <div class="header-left">
                 <div class="logo-mark">&#9889;</div>
                 <div>
-                    <h1>Bio-Signal Session Report</h1>
-                    <div class="meta">Session: {stats['session_id']} &middot; {stats['date_str']}</div>
+                    <h1>Non-Clinical Decision Support MHS Report</h1>
+                    <div class="meta">Patient: <strong style="color:#60A5FA;">{stats['patient_name']}</strong> &middot; Session: {stats['session_id']} &middot; {stats['date_str']}</div>
                 </div>
             </div>
             <div class="badge">{stats['primary_state'].replace('_', ' ')}</div>
@@ -315,12 +401,25 @@ class SessionReportGenerator:
 
         <div class="grid">
             <div class="card">
+                <div class="title">Patient</div>
+                <div class="value" style="font-size:18px; word-break:break-word;">{stats['patient_name']}</div>
+                <div class="sub">Subject Name</div>
+            </div>
+            <div class="card">
                 <div class="title">Duration</div>
                 <div class="value">{stats['duration_sec']}s</div>
             </div>
             <div class="card">
-                <div class="title">Total Packets</div>
+                <div class="title">Total Samples</div>
                 <div class="value">{stats['total_samples']}</div>
+            </div>
+            <div class="card">
+                <div class="title">Sampling Rate</div>
+                <div class="value">{stats['actual_rate_hz']} Hz</div>
+            </div>
+            <div class="card">
+                <div class="title">Connection</div>
+                <div class="value" style="font-size:16px;">{stats['connection_label']}</div>
             </div>
             <div class="card">
                 <div class="title">Avg GSR</div>
@@ -357,8 +456,12 @@ class SessionReportGenerator:
             </div>
         </div>
 
+        <div class="disclaimer-box">
+            <strong>Non-Clinical Decision Support Disclaimer:</strong> {disclaimer_text}
+        </div>
+
         <div class="footer">
-            <strong>ESP32 Wearable Stress-Monitoring Research Prototype</strong> &middot; Telemetry &amp; Analytics Platform
+            <strong>ESP32 Wearable Stress-Monitoring Research Prototype</strong> &middot; Non-Clinical Decision Support Platform
         </div>
     </div>
 </body>
@@ -368,17 +471,26 @@ class SessionReportGenerator:
             f.write(html_content)
 
     def _render_markdown_report(self, stats: Dict[str, Any], output_path: Path):
-        md_content = f"""# Bio-Signal Stress Monitoring Session Report
+        disclaimer_text = (
+            "This report summarizes model-estimated physiological stress responses and signal characteristics "
+            "during the recorded session. It is intended for research and non-clinical decision support and does not "
+            "constitute a medical or psychiatric diagnosis."
+        )
 
+        md_content = f"""# Non-Clinical Decision Support MHS Report
+
+**Patient Name**: **{stats['patient_name']}**  
 **Session ID**: `{stats['session_id']}`  
 **Generated At**: {stats['date_str']}  
-**Primary Classified State**: **{stats['primary_state']}**
+**Primary Classified State**: **{stats['primary_state']}**  
+**Connection Mode**: {stats['connection_label']}
 
 ---
 
 ### Session Overview
 - **Total Duration**: {stats['duration_sec']} seconds
 - **Total Samples Collected**: {stats['total_samples']} packets
+- **Actual Sampling Rate**: {stats['actual_rate_hz']} Hz
 - **Mean GSR Conductance**: {stats['gsr_avg_uS']} μS (Max: {stats['gsr_max_uS']} μS)
 - **Mean Physical Acceleration**: {stats['motion_avg_g']} g
 
@@ -393,7 +505,12 @@ class SessionReportGenerator:
 | **HIGH STRESS** | {stats['pct_high']}% |
 
 ---
-*Report generated automatically by ESP32 Desktop Dashboard Receiver.*
+
+### Non-Clinical Decision Support Disclaimer
+> **Notice**: {disclaimer_text}
+
+---
+*Non-Clinical Decision Support Report generated by ESP32 Wearable Stress-Monitoring Research Platform.*
 """
         with open(output_path, "w", encoding="utf-8") as f:
             f.write(md_content)
