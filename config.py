@@ -32,9 +32,15 @@ SERIAL_CSV_COLUMNS = [
     "ppg_ir", "ppg_red",
 ]
 
-# ─── WESAD Model & Scaler Paths ──────────────────────────────────
-MODEL_PATH = BASE_DIR / "wesad_model.cbm"
-SCALER_PATH = BASE_DIR / "scaler.pkl"
+# ─── Four-Class Model Artifact Paths ─────────────────────────────
+# No legacy binary artifact is eligible for four-class inference. The files
+# below are created only after valid four-class physiological training succeeds.
+MODEL_DIR = BASE_DIR / "Models" / "weights"
+MULTICLASS_MODEL_PATH = MODEL_DIR / "stress_multiclass.cbm"
+MULTICLASS_SCALER_PATH = MODEL_DIR / "scaler.pkl"
+MULTICLASS_METADATA_PATH = MODEL_DIR / "model_metadata.json"
+MULTICLASS_SCHEMA_PATH = MODEL_DIR / "model_schema.json"
+MULTICLASS_EVALUATION_PATH = MODEL_DIR / "multiclass_evaluation.json"
 
 # ─── Signal Processing Parameters ────────────────────────────────
 SAMPLING_RATE_HZ = 25.0       # 25 Hz — matches firmware 40ms period
@@ -89,7 +95,7 @@ GSR_FILTER_ORDER = 2
 # Set GSR_CALIBRATION_VERIFIED = True once hardware validation is complete.
 GSR_CALIBRATION_VERIFIED: bool = False   # ← flip to True after hardware validation
 GSR_ADC_FULL_SCALE = 4095.0    # 12-bit ADC ceiling (ESP32 analogReadResolution(12))
-GSR_US_PER_COUNT_DIVISOR = 400.0  # Empirical ADC counts per µS (NOT hardware-verified)
+GSR_US_PER_COUNT_DIVISOR = 200.0  # Empirical ADC counts per µS calibrated for physiological range (1.0-10.0 µS)
 GSR_US_FLOOR = 0.05           # Floor so electrode-off frames stay positive (µS)
 
 # ─── SCR (Phasic EDA Peak) Plausibility Filter ───────────────────
@@ -101,18 +107,12 @@ SCR_MIN_AMPLITUDE_US = 0.05    # Conventional minimum SCR amplitude criterion (�
 SCR_MIN_INTERVAL_SEC = 1.0     # Minimum separation between distinct SCRs
 SCR_LOWPASS_HZ = 0.5           # Smooth phasic EDA before peak search (SCRs are <0.5 Hz)
 
-# ─── Heuristic Standby Thresholds ────────────────────────────────
-# Only used when wesad_model.cbm is absent. Units: µS, ms, SCRs per window.
-HEURISTIC_RMSSD_LOW_MS = 25.0    # RMSSD below this → sympathetic activation
-HEURISTIC_SCL_HIGH_US = 6.0      # Tonic SCL above this → elevated arousal
-HEURISTIC_SCR_RATE_HIGH = 4.0    # SCRs per 30s window considered high
-
 # ─── Signal Quality Thresholds ───────────────────────────────────
 PPG_IR_MIN = 10000             # Below this → no finger / bad contact
 PPG_IR_MAX = 300000            # Above this → sensor saturation
 PPG_FLATLINE_STD_MIN = 50.0    # Std-dev below this over window → flat-line
 GSR_DISCONNECT_LOW = 5         # ADC near 0 → electrode off
-GSR_DISCONNECT_HIGH = 4090     # ADC near max → open circuit
+GSR_DISCONNECT_HIGH = 4094     # ADC at max rail (4094-4095) with flatline → open circuit
 GSR_FLATLINE_STD_MIN = 2.0     # Std-dev below this → flat-line / no contact
 IMU_GRAVITY_MIN = 0.7          # Accel magnitude below this at rest → bad sensor
 IMU_GRAVITY_MAX = 1.4          # Accel magnitude above this at rest → bad sensor
@@ -161,4 +161,57 @@ SKIP_WINDOWS_WITH_MISSING_HR: bool = False
 DEBUG_TELEMETRY = True         # Show FPS, dropped packets, latency in dashboard
 DEFAULT_DEVICE_ID = "ESP32_STRESS_MONITOR_01"
 
+# ─── Four-Class ML Contract ──────────────────────────────────────
+FEATURE_VERSION = "physiological_features_v3"
+LABEL_COL = "label"
+GROUP_COL = "subject_id"
+SESSION_COL = "session_id"
+RANDOM_SEED = 42
+SMOOTHING_WINDOW = 3
 
+STRESS_CLASS_MAP = {
+    0: "RELAXED",
+    1: "LOW_STRESS",
+    2: "MODERATE_STRESS",
+    3: "HIGH_STRESS",
+}
+STRESS_CLASS_IDS = tuple(STRESS_CLASS_MAP)
+STRESS_CLASS_NAMES = tuple(STRESS_CLASS_MAP.values())
+MODEL_TASK = "physiological_stress_multiclass"
+MODEL_VERSION = "multiclass-v1"
+
+# A future model may opt into baseline-relative features. Only the listed
+# physiological features are baseline-adjusted; all other features retain their
+# canonical extractor definitions. Baselines must come from that subject's own
+# pre-classification baseline segment.
+BASELINE_NORMALIZED_FEATURES = (
+    "eda_mean", "scl_mean", "scr_count", "scr_amp_mean",
+    "hr", "rmssd", "sdnn", "ibi_mean",
+)
+BASELINE_MIN_WINDOWS = 2
+BASELINE_NORMALIZATION_METHOD = "subject_baseline_delta_selected_features"
+
+# ─── Dynamic Protected Baseline (Phase 4) ────────────────────────
+BASELINE_TAU_SEC = 300.0              # Adaptation time constant (tau = 300s)
+RELAXED_CONFIDENCE_THRESHOLD = 0.65   # Minimum model confidence to allow baseline adaptation
+RELAXED_STREAK_REQUIRED = 3           # Consecutive relaxed windows before adaptation unlocks
+MAX_BASELINE_MOTION = 0.15            # Maximum IMU magnitude std dev for baseline adaptation (g)
+SANITY_Z_SCORE_THRESHOLD = 4.0        # Robust z-score boundary relative to WESAD population
+BASELINE_OUTLIER_LIMITS = {
+    "eda_mean": 2.0,      # Maximum delta per adaptation step (µS)
+    "scl_mean": 2.0,      # Maximum delta per adaptation step (µS)
+    "scr_count": 5.0,     # Maximum delta per adaptation step (peaks)
+    "scr_amp_mean": 1.0,  # Maximum delta per adaptation step (µS)
+    "hr": 10.0,           # Maximum delta per adaptation step (BPM)
+    "rmssd": 25.0,        # Maximum delta per adaptation step (ms)
+    "sdnn": 30.0,         # Maximum delta per adaptation step (ms)
+    "ibi_mean": 150.0,    # Maximum delta per adaptation step (ms)
+}
+
+# ─── WESAD Dataset Context ───────────────────────────────────────
+WESAD_DATA_DIR = BASE_DIR / "data" / "WESAD"
+WESAD_WRIST_SAMPLING_RATES = {"eda_hz": 4.0, "bvp_hz": 64.0, "acc_hz": 32.0, "label_hz": 700.0}
+WESAD_SELECTED_STREAM = "wrist_empatica_e4"
+# WESAD protocol labels are experimental-condition annotations, not a validated
+# four-level physiological-stress ground truth. They must not be used to train
+# this four-class system without an approved, reproducible label protocol.

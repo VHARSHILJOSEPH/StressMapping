@@ -1,0 +1,40 @@
+{
+    "feature_version": "esp32_features_v2",
+    "feature_columns": [
+        "eda_mean",
+        "eda_std",
+        "eda_slope",
+        "scl_mean",
+        "phasic_mean",
+        "scr_count",
+        "scr_amp_mean",
+        "scr_rise_mean",
+        "scr_recovery_mean",
+        "hr",
+        "rmssd",
+        "sdnn",
+        "pnn50",
+        "ibi_mean",
+        "ibi_std",
+        "imu_mag_mean",
+        "imu_mag_std",
+        "imu_energy",
+        "imu_jerk_mean",
+        "imu_jerk_std",
+        "imu_var_x",
+        "imu_var_y",
+        "imu_var_z"
+    ],
+    "feature_count": 23,
+    "label_mode": "binary",
+    "classes": [
+        0,
+        1
+    ],
+    "positive_class": 1,
+    "group_column": "subject_id",
+    "session_column": "session_id",
+    "decision_threshold": 0.5,
+    "smoothing_window": 3,
+    "random_seed": 42
+}

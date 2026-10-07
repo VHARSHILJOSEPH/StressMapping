@@ -13,10 +13,14 @@ BASE_DIR = Path(__file__).resolve().parent
 
 
 def check_model_artifacts():
-    """Verify CatBoost model and scaler files exist."""
-    model_exists = (BASE_DIR / "wesad_model.cbm").exists()
-    scaler_exists = (BASE_DIR / "scaler.pkl").exists()
-    return model_exists, scaler_exists
+    """Verify versioned model artifact files exist."""
+    import config
+    required = [
+        config.MULTICLASS_MODEL_PATH, config.MULTICLASS_SCALER_PATH,
+        config.MULTICLASS_METADATA_PATH, config.MULTICLASS_SCHEMA_PATH,
+        config.MULTICLASS_EVALUATION_PATH,
+    ]
+    return all(path.exists() for path in required), False
 
 
 def scan_serial_ports():
@@ -35,12 +39,12 @@ def main():
     print(f" Working Directory: {BASE_DIR}")
 
     # Artifact check
-    model_ok, scaler_ok = check_model_artifacts()
-    print("\n[1/2] Model Artifacts:")
-    print(f"  - wesad_model.cbm : {'[OK]' if model_ok else '[MISSING]'}")
-    print(f"  - scaler.pkl      : {'[OK]' if scaler_ok else '[MISSING]'}")
-    if not (model_ok and scaler_ok):
-        print("  → Heuristic fallback will be used until model files are placed in project root.\n")
+    model_ok, _ = check_model_artifacts()
+    import config as _config
+    print("\n[1/2] Four-Class Model Artifacts:")
+    print(f"  - {_config.MULTICLASS_MODEL_PATH} : {'[OK]' if model_ok else '[MISSING]'}")
+    if not model_ok:
+        print("  → Four-class classification is unavailable. Provide approved labelled physiological data before training.\n")
 
     # Serial port scan
     print("[2/2] USB Serial Ports:")

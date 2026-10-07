@@ -1,20 +1,36 @@
+"""Mental Health Summary (MHS) Session Report Generator.
+
+Generates clinical-grade session reports in HTML, Markdown, JSON, and PDF formats:
+- HTML: Premium dark-mode dashboard cards with Autonomic Stress State Distribution and Window-by-Window reading timeline.
+- Markdown: Structured clinical markdown summary with reading-per-reading window tables.
+- JSON: Machine-readable metrics payload with per-window readings.
+- PDF: Multi-page document with HR/EDA timelines and horizontal window bars.
+"""
+
+import json
 import os
-import pandas as pd
-import numpy as np
+import sys
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, Any, Optional
+from typing import Any, Dict, List, Optional
+
+import numpy as np
+import pandas as pd
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import config
+from report_generator import _extract_windows_from_session, generate_pdf_report
+
 
 class SessionReportGenerator:
-    """Generates Mental Health Summary (MHS) session report documents in HTML and Markdown."""
+    """Generates Mental Health Summary (MHS) session report documents in HTML, Markdown, JSON, and PDF."""
 
     def __init__(self, reports_dir: Path = config.REPORTS_DIR):
         self.reports_dir = Path(reports_dir)
         self.reports_dir.mkdir(parents=True, exist_ok=True)
 
     def generate_report_from_csv(self, csv_file_path: str, patient_name: Optional[str] = None) -> Dict[str, str]:
-        """Read session CSV file and compile MHS statistical report files."""
+        """Reads session CSV file and compiles MHS statistical report files."""
         if not os.path.exists(csv_file_path):
             raise FileNotFoundError(f"CSV file not found: {csv_file_path}")
 
@@ -24,10 +40,17 @@ class SessionReportGenerator:
             raise ValueError(f"Could not read CSV file: {exc}")
 
         if df.empty:
-            raise ValueError(f"Session CSV file '{os.path.basename(csv_file_path)}' is empty (0 samples). Please ensure data is logged before generating a report.")
+            raise ValueError(
+                f"Session CSV file '{os.path.basename(csv_file_path)}' is empty (0 samples). "
+                "Please ensure data is logged before generating a report."
+            )
 
         # Compute Session Metrics
-        session_id = str(df["session_id"].iloc[0]) if "session_id" in df.columns and pd.notna(df["session_id"].iloc[0]) else Path(csv_file_path).stem
+        session_id = (
+            str(df["session_id"].iloc[0])
+            if "session_id" in df.columns and pd.notna(df["session_id"].iloc[0])
+            else Path(csv_file_path).stem
+        )
         total_samples = len(df)
 
         # Extract Patient Name
@@ -45,7 +68,7 @@ class SessionReportGenerator:
                 patient_name = "Anonymous"
             else:
                 patient_name = session_id.replace("_", " ").title()
-        
+
         # Estimate duration from ISO timestamps if available
         duration_sec = total_samples / config.SAMPLING_RATE_HZ
         if "timestamp_iso" in df.columns and len(df) > 1:
@@ -55,6 +78,8 @@ class SessionReportGenerator:
                 duration_sec = (t_end - t_start).total_seconds()
             except Exception:
                 pass
+        elif "timestamp_ms" in df.columns and len(df) > 1:
+            duration_sec = (float(df["timestamp_ms"].iloc[-1]) - float(df["timestamp_ms"].iloc[0])) / 1000.0
 
         # Compute actual sampling rate from timestamps
         actual_rate_hz = round(total_samples / max(duration_sec, 0.1), 1)
@@ -62,33 +87,63 @@ class SessionReportGenerator:
         # Determine connection mode from data
         mode_col = df["mode"] if "mode" in df.columns else pd.Series(["UNKNOWN"])
         primary_mode = mode_col.mode().iloc[0] if not mode_col.empty else "UNKNOWN"
-        connection_label = "USB Serial (C-to-C)" if primary_mode == "SERIAL" else (
-            "Live UDP (Wi-Fi)" if primary_mode == "LIVE_UDP" else (
-            "Simulation" if primary_mode == "SIMULATION" else primary_mode
-        ))
+        connection_label = (
+            "USB Serial (C-to-C)"
+            if primary_mode == "SERIAL"
+            else (
+                "Live UDP (Wi-Fi)"
+                if primary_mode == "LIVE_UDP"
+                else ("Simulated Hardware" if primary_mode in ["SIMULATION", "SIMULATED"] else primary_mode)
+            )
+        )
 
         # Signal Statistics
-        ppg_raw = df["ppg_raw"] if "ppg_raw" in df.columns else pd.Series([0])
-        gsr_raw = df["gsr_raw"] if "gsr_raw" in df.columns else pd.Series([0])
+        ppg_raw = df["ppg_raw"] if "ppg_raw" in df.columns else pd.Series([0.0])
+        gsr_raw = df["gsr_raw"] if "gsr_raw" in df.columns else pd.Series([0.0])
         imu_mag = df["imu_magnitude"] if "imu_magnitude" in df.columns else pd.Series([1.0])
 
         ppg_avg = float(ppg_raw.mean())
         ppg_std = float(ppg_raw.std())
-        gsr_avg = float(gsr_raw.mean())
-        gsr_max = float(gsr_raw.max())
+
+        # Convert GSR to uS
+        if gsr_raw.mean() > 100.0:
+            gsr_uS_series = gsr_raw.apply(lambda x: max(0.05, (4095.0 - x) / 400.0) if x <= 4095.0 else x / 1000.0)
+        else:
+            gsr_uS_series = gsr_raw
+
+        gsr_avg = float(gsr_uS_series.mean())
+        gsr_max = float(gsr_uS_series.max())
         motion_avg = float(imu_mag.mean())
 
-        # Stress State Breakdown
-        stress_col = df["stress_state"] if "stress_state" in df.columns else pd.Series(["UNKNOWN"])
-        state_counts = stress_col.value_counts(normalize=True) * 100.0
-        
-        pct_relaxed = round(float(state_counts.get("RELAXED", 0.0)), 1)
+        # Extract Window-by-Window Readings ("reading per reading")
+        windows = _extract_windows_from_session(df, csv_file_path, session_id)
+
+        # Stress State Breakdown across windows
+        if windows:
+            valid_labels = [
+                w["label"] for w in windows
+                if w.get("label") and str(w["label"]).strip().upper() not in ["NAN", "NONE", "UNKNOWN", "NULL"]
+            ]
+            if not valid_labels:
+                valid_labels = ["RELAXED"]
+            labels_series = pd.Series(valid_labels)
+            state_counts = labels_series.value_counts(normalize=True) * 100.0
+            primary_state = labels_series.mode().iloc[0] if not labels_series.empty else "RELAXED"
+        else:
+            stress_col = df["stress_state"] if "stress_state" in df.columns else pd.Series(["RELAXED"])
+            stress_col = stress_col.replace(["NAN", "nan", "None", "NONE", "UNKNOWN"], "RELAXED")
+            state_counts = stress_col.value_counts(normalize=True) * 100.0
+            primary_state = stress_col.mode().iloc[0] if not stress_col.empty else "RELAXED"
+
+        pct_relaxed = round(float(state_counts.get("RELAXED", state_counts.get("NON_STRESS", 0.0))), 1)
         pct_low = round(float(state_counts.get("LOW_STRESS", 0.0)), 1)
         pct_mod = round(float(state_counts.get("MODERATE_STRESS", 0.0)), 1)
-        pct_high = round(float(state_counts.get("HIGH_STRESS", 0.0)), 1)
+        pct_high = round(float(state_counts.get("HIGH_STRESS", state_counts.get("STRESS", 0.0))), 1)
 
-        # Primary Stress Classification for Session
-        primary_state = stress_col.mode().iloc[0] if not stress_col.empty else "UNKNOWN"
+        # If binary labels were logged: map STRESS to high and NON_STRESS to relaxed
+        if pct_relaxed == 0.0 and pct_low == 0.0 and pct_mod == 0.0 and pct_high == 0.0:
+            pct_relaxed = round(float(state_counts.get("NON-STRESS", 0.0)), 1)
+            pct_high = round(float(state_counts.get("STRESS", 0.0)), 1)
 
         stats = {
             "session_id": session_id,
@@ -101,14 +156,41 @@ class SessionReportGenerator:
             "primary_state": primary_state,
             "ppg_avg": round(ppg_avg, 1),
             "ppg_std": round(ppg_std, 1),
-            "gsr_avg_uS": round(gsr_avg, 2),
-            "gsr_max_uS": round(gsr_max, 2),
+            "gsr_avg_us": round(gsr_avg, 2),
+            "gsr_max_us": round(gsr_max, 2),
             "motion_avg_g": round(motion_avg, 3),
             "pct_relaxed": pct_relaxed,
             "pct_low": pct_low,
             "pct_mod": pct_mod,
             "pct_high": pct_high,
+            "readings": windows,
         }
+
+        # Recommendations
+        recommendations = []
+        if pct_high > 30.0:
+            recommendations.append(
+                "HIGH STRESS ALERT: Subject experienced sustained high stress >30% of session duration. "
+                "Recommended: Guided breathing / VR decompression protocol."
+            )
+        elif pct_mod + pct_high > 50.0:
+            recommendations.append(
+                "MODERATE STRESS ELEVATION: Subject displayed elevated stress >50% of session. "
+                "Recommended: Adjust task difficulty or introduce rest breaks."
+            )
+        else:
+            recommendations.append(
+                "STABLE AUTONOMIC STATE: Physiological markers remained largely within baseline/low stress ranges during this session. "
+                "Autonomic arousal was contained."
+            )
+
+        if motion_avg > 1.2:
+            recommendations.append(
+                "MOTION ARTIFACT NOTICE: High average physical movement detected (>1.2g). "
+                "Ensure electrodes remained securely attached."
+            )
+
+        stats["recommendations"] = recommendations
 
         # Render Output Files
         html_path = self.reports_dir / f"{session_id}_mhs_report.html"
@@ -116,29 +198,14 @@ class SessionReportGenerator:
         json_path = self.reports_dir / f"{session_id}_mhs_report.json"
         pdf_path = self.reports_dir / f"{session_id}_mhs_report.pdf"
 
-        # Generate Non-Clinical Decision Support Guidance
-        recommendations = []
-        if pct_high > 30.0:
-            recommendations.append("HIGH STRESS ALERT: Subject experienced sustained high stress >30% of session duration. Recommended: Guided breathing / VR decompression protocol.")
-        elif pct_mod + pct_high > 50.0:
-            recommendations.append("MODERATE STRESS ELEVATION: Subject displayed elevated stress >50% of session. Recommended: Adjust task difficulty or introduce rest breaks.")
-        else:
-            recommendations.append("STABLE AUTONOMIC STATE: Physiological markers remained largely within baseline/low stress range.")
-
-        if motion_avg > 1.2:
-            recommendations.append("MOTION ARTIFACT NOTICE: High average physical movement detected (>1.2g). Ensure electrodes remained securely attached.")
-
-        stats["recommendations"] = recommendations
-
         self._render_html_report(stats, html_path)
         self._render_markdown_report(stats, md_path)
         self._render_json_report(stats, json_path)
 
         try:
-            from report_generator import generate_pdf_report
             generate_pdf_report(csv_file_path, output_pdf_path=str(pdf_path), patient_name=patient_name)
-        except Exception:
-            pass
+        except Exception as pdf_err:
+            print(f"[SessionReportGenerator] PDF generation failed: {pdf_err}")
 
         result = {
             "html_path": str(html_path),
@@ -154,22 +221,20 @@ class SessionReportGenerator:
 
     def _render_json_report(self, stats: Dict[str, Any], output_path: Path):
         """Export structured non-clinical decision-support data as JSON."""
-        import json
         with open(output_path, "w", encoding="utf-8") as f:
             json.dump(stats, f, indent=2)
 
     def _render_html_report(self, stats: Dict[str, Any], output_path: Path):
-        # Determine badge color based on primary state
-        state = stats['primary_state']
-        if state == "RELAXED":
+        state = stats["primary_state"]
+        if "RELAX" in state:
             badge_bg = "linear-gradient(135deg, rgba(34,197,94,0.15), rgba(34,197,94,0.08))"
             badge_color = "#22C55E"
             badge_border = "rgba(34,197,94,0.3)"
-        elif state == "LOW_STRESS":
+        elif "LOW" in state:
             badge_bg = "linear-gradient(135deg, rgba(6,182,212,0.15), rgba(6,182,212,0.08))"
             badge_color = "#06B6D4"
             badge_border = "rgba(6,182,212,0.3)"
-        elif state == "MODERATE_STRESS":
+        elif "MOD" in state:
             badge_bg = "linear-gradient(135deg, rgba(245,158,11,0.15), rgba(245,158,11,0.08))"
             badge_color = "#F59E0B"
             badge_border = "rgba(245,158,11,0.3)"
@@ -178,7 +243,49 @@ class SessionReportGenerator:
             badge_color = "#EF4444"
             badge_border = "rgba(239,68,68,0.3)"
 
-        disclaimer_text = "This report summarizes model-estimated physiological stress responses and signal characteristics during the recorded session. It is intended for research and non-clinical decision support and does not constitute a medical or psychiatric diagnosis."
+        disclaimer_text = (
+            "This report summarizes model-estimated physiological stress responses and signal characteristics "
+            "during the recorded session. It is intended for research and non-clinical decision support and does not constitute a medical diagnosis or psychiatric diagnosis."
+        )
+
+        # Build reading-by-reading table rows
+        reading_rows = []
+        for r in stats.get("readings", []):
+            w_lbl = r.get("label", "RELAXED")
+            if not w_lbl or str(w_lbl).strip().upper() in ["NAN", "NONE", "UNKNOWN", "NULL"]:
+                w_lbl = "RELAXED"
+            if "RELAX" in w_lbl:
+                pill_bg = "rgba(34,197,94,0.15)"
+                pill_c = "#22C55E"
+            elif "LOW" in w_lbl:
+                pill_bg = "rgba(6,182,212,0.15)"
+                pill_c = "#06B6D4"
+            elif "MOD" in w_lbl:
+                pill_bg = "rgba(245,158,11,0.15)"
+                pill_c = "#F59E0B"
+            else:
+                pill_bg = "rgba(239,68,68,0.15)"
+                pill_c = "#EF4444"
+
+            hr_val = r.get("hr")
+            hr_str = f"{hr_val:.1f} BPM" if (hr_val is not None and hr_val > 0) else "--"
+            eda_str = f"{r['eda']:.2f} μS" if r.get("eda") is not None else "--"
+            reading_rows.append(f"""
+                <tr style="border-bottom:1px solid rgba(56, 82, 130, 0.15); height:36px;">
+                    <td style="padding:8px 12px; font-weight:700; color:#F1F5F9;">W{r['window_num']}</td>
+                    <td style="padding:8px 12px; color:#94A3B8;">{r['start_sec']}s &ndash; {r['end_sec']}s</td>
+                    <td style="padding:8px 12px;">
+                        <span style="display:inline-block; padding:2px 10px; border-radius:12px; font-size:11px; font-weight:700; background:{pill_bg}; color:{pill_c};">
+                            {w_lbl.replace('_', ' ')}
+                        </span>
+                    </td>
+                    <td style="padding:8px 12px; color:#F1F5F9; font-weight:600;">{r['confidence_pct']:.1f}%</td>
+                    <td style="padding:8px 12px; color:#94A3B8;">{hr_str}</td>
+                    <td style="padding:8px 12px; color:#94A3B8;">{eda_str}</td>
+                </tr>
+            """)
+
+        readings_html = "".join(reading_rows) if reading_rows else '<tr><td colspan="6" style="padding:16px; text-align:center; color:#64748B;">No window readings recorded</td></tr>'
 
         html_content = f"""<!DOCTYPE html>
 <html lang="en">
@@ -231,6 +338,7 @@ class SessionReportGenerator:
             font-size: 22px;
             box-shadow: 0 4px 14px rgba(37, 99, 235, 0.3);
             flex-shrink: 0;
+            color: #FFFFFF;
         }}
         .header h1 {{
             color: #F1F5F9;
@@ -423,7 +531,7 @@ class SessionReportGenerator:
             </div>
             <div class="card">
                 <div class="title">Avg GSR</div>
-                <div class="value">{stats['gsr_avg_uS']} &mu;S</div>
+                <div class="value">{stats['gsr_avg_us']} &mu;S</div>
             </div>
             <div class="card">
                 <div class="title">Motion Index</div>
@@ -456,6 +564,27 @@ class SessionReportGenerator:
             </div>
         </div>
 
+        <div class="section">
+            <h3>Stress Classification Timeline (Reading per Reading)</h3>
+            <div style="overflow-x:auto;">
+                <table style="width:100%; border-collapse:collapse; margin-top:8px; font-size:12px;">
+                    <thead>
+                        <tr style="border-bottom:1px solid rgba(56, 82, 130, 0.3); color:#64748B; text-align:left;">
+                            <th style="padding:10px 8px;">WINDOW</th>
+                            <th style="padding:10px 8px;">TIME RANGE</th>
+                            <th style="padding:10px 8px;">STRESS LEVEL</th>
+                            <th style="padding:10px 8px;">CONFIDENCE</th>
+                            <th style="padding:10px 8px;">HEART RATE</th>
+                            <th style="padding:10px 8px;">GSR CONDUCTANCE</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {readings_html}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
         <div class="disclaimer-box">
             <strong>Non-Clinical Decision Support Disclaimer:</strong> {disclaimer_text}
         </div>
@@ -473,9 +602,22 @@ class SessionReportGenerator:
     def _render_markdown_report(self, stats: Dict[str, Any], output_path: Path):
         disclaimer_text = (
             "This report summarizes model-estimated physiological stress responses and signal characteristics "
-            "during the recorded session. It is intended for research and non-clinical decision support and does not "
-            "constitute a medical or psychiatric diagnosis."
+            "during the recorded session. It is intended for research and non-clinical decision support and does not constitute a medical diagnosis or psychiatric diagnosis."
         )
+
+        reading_rows = []
+        for r in stats.get("readings", []):
+            w_lbl = r.get("label", "RELAXED")
+            if not w_lbl or str(w_lbl).strip().upper() in ["NAN", "NONE", "UNKNOWN", "NULL"]:
+                w_lbl = "RELAXED"
+            hr_val = r.get("hr")
+            hr_str = f"{hr_val:.1f} BPM" if (hr_val is not None and hr_val > 0) else "--"
+            eda_str = f"{r['eda']:.2f} μS" if r.get("eda") is not None else "--"
+            reading_rows.append(
+                f"| W{r['window_num']} | {r['start_sec']}s - {r['end_sec']}s | **{w_lbl}** | {r['confidence_pct']:.1f}% | {hr_str} | {eda_str} |"
+            )
+
+        readings_table = "\n".join(reading_rows) if reading_rows else "| -- | -- | -- | -- | -- | -- |"
 
         md_content = f"""# Non-Clinical Decision Support MHS Report
 
@@ -491,7 +633,7 @@ class SessionReportGenerator:
 - **Total Duration**: {stats['duration_sec']} seconds
 - **Total Samples Collected**: {stats['total_samples']} packets
 - **Actual Sampling Rate**: {stats['actual_rate_hz']} Hz
-- **Mean GSR Conductance**: {stats['gsr_avg_uS']} μS (Max: {stats['gsr_max_uS']} μS)
+- **Mean GSR Conductance**: {stats['gsr_avg_us']} μS (Max: {stats['gsr_max_us']} μS)
 - **Mean Physical Acceleration**: {stats['motion_avg_g']} g
 
 ---
@@ -500,9 +642,16 @@ class SessionReportGenerator:
 | Stress Level | Percentage |
 | :--- | :--- |
 | **RELAXED** | {stats['pct_relaxed']}% |
-| **LOW STRESS** | {stats['pct_low']}% |
-| **MODERATE STRESS** | {stats['pct_mod']}% |
-| **HIGH STRESS** | {stats['pct_high']}% |
+| **LOW_STRESS** | {stats['pct_low']}% |
+| **MODERATE_STRESS** | {stats['pct_mod']}% |
+| **HIGH_STRESS** | {stats['pct_high']}% |
+
+---
+
+### Stress Classification Timeline per 30s Window (Reading per Reading)
+| Window | Time Interval | Stress Level | Confidence | Heart Rate | GSR Conductance |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+{readings_table}
 
 ---
 
@@ -514,3 +663,18 @@ class SessionReportGenerator:
 """
         with open(output_path, "w", encoding="utf-8") as f:
             f.write(md_content)
+
+
+if __name__ == "__main__":
+    import sys
+
+    if len(sys.argv) < 2:
+        print("Usage: python desktop_app/report_generator.py <session_csv_path> [patient_name]")
+        sys.exit(1)
+
+    csv_file = sys.argv[1]
+    pat_name = sys.argv[2] if len(sys.argv) > 2 else None
+    gen = SessionReportGenerator()
+    results = gen.generate_report_from_csv(csv_file, patient_name=pat_name)
+    print(f"Generated reports: {results}")
+

@@ -26,6 +26,7 @@ try:
     import serial.tools.list_ports
     SERIAL_AVAILABLE = True
 except ImportError:
+    serial = None
     SERIAL_AVAILABLE = False
 
 logger = logging.getLogger(__name__)
@@ -165,34 +166,85 @@ class SerialDataReceiver:
         mode_str = "SIMULATED DEMO MODE" if self.simulation_mode else f"{self.serial_port_name} @ {self.baud_rate} baud"
         self._log(f"Receiver started → {mode_str}")
 
-    def set_simulation_mode(self, enabled: bool):
-        """Toggle simulation mode on or off."""
+    def set_simulation_mode(self, enabled: bool, stress_level: str = "RELAXED"):
+        """Toggle simulation mode on or off, optionally setting simulated stress level."""
         self.simulation_mode = enabled
-        self._log(f"Simulation mode set to {enabled}")
+        self.simulation_stress_level = stress_level
+        self._log(f"Simulation mode set to {enabled} (level: {stress_level})")
+
+    def set_simulation_stress_level(self, level: str):
+        """Update simulated stress level ('RELAXED', 'LOW_STRESS', 'MODERATE_STRESS', 'HIGH_STRESS', 'DYNAMIC')."""
+        self.simulation_stress_level = level
+        self._log(f"Simulated stress level set to {level}")
 
     def _generate_simulated_packet(self, counter: int) -> Dict[str, Any]:
-        """Generate a realistic synthetic bio-telemetry packet for demo mode."""
+        """Generate a realistic synthetic bio-telemetry packet for demo mode across all 4 stress states."""
         now_wall = time.time()
-        t = now_wall
+        # Precise sample-accurate time base matching nominal sampling rate (25 Hz)
+        t = counter / max(config.SAMPLING_RATE_HZ, 1.0)
 
-        # PPG signal: ~72 BPM cardiac pulse (1.2 Hz) with secondary dicrotic notch wave
-        hr_hz = 1.2
-        ppg_base = 80000.0 + 15000.0 * math.sin(2 * math.pi * hr_hz * t) + 4000.0 * math.sin(4 * math.pi * hr_hz * t)
-        ppg_ir = ppg_base + random.normalvariate(0, 300)
-        ppg_red = ppg_base * 0.75 + random.normalvariate(0, 250)
+        # Determine effective stress level (support DYNAMIC scenario cycling over time)
+        level = getattr(self, "simulation_stress_level", "RELAXED").upper()
+        if level == "DYNAMIC":
+            phase_cycle = int(t) % 200
+            if phase_cycle < 50:
+                level = "RELAXED"
+            elif phase_cycle < 100:
+                level = "LOW_STRESS"
+            elif phase_cycle < 150:
+                level = "MODERATE_STRESS"
+            else:
+                level = "HIGH_STRESS"
 
-        # GSR signal: ~2200 ADC baseline with slow tonic drift + occasional SCR spikes
-        gsr_base = 2200.0 + 150.0 * math.sin(t / 12.0)
-        spike = 350.0 * math.exp(-((t % 15.0) / 2.0)) if (t % 15.0) < 4.0 else 0.0
-        gsr_raw = max(100.0, min(4000.0, gsr_base - spike + random.normalvariate(0, 15)))
+        if level == "HIGH_STRESS":
+            hr_hz = 1.95  # ~117 BPM
+            ppg_amp = 19000.0
+            # Higher skin conductance (ADC drops to ~1600-1900 counts)
+            raw_gsr_base = 1800.0 + 80.0 * math.sin(t / 8.0)
+            spike_period = 3.2
+            spike_amp = 450.0
+            motion_mult = 3.8
+        elif level == "MODERATE_STRESS":
+            hr_hz = 1.62  # ~97 BPM
+            ppg_amp = 16500.0
+            # Moderate conductance (ADC drops to ~2600-2800 counts)
+            raw_gsr_base = 2700.0 + 90.0 * math.sin(t / 10.0)
+            spike_period = 5.5
+            spike_amp = 350.0
+            motion_mult = 2.0
+        elif level == "LOW_STRESS":
+            hr_hz = 1.38  # ~83 BPM
+            ppg_amp = 15500.0
+            # Mild conductance (ADC drops to ~3300 counts)
+            raw_gsr_base = 3300.0 + 100.0 * math.sin(t / 12.0)
+            spike_period = 8.5
+            spike_amp = 260.0
+            motion_mult = 1.2
+        else:  # RELAXED
+            hr_hz = 1.15  # ~69 BPM
+            ppg_amp = 14000.0
+            # Low conductance / resting dry skin (ADC ~3900-4020 counts)
+            raw_gsr_base = 3920.0 + 70.0 * math.sin(t / 15.0)
+            spike_period = 25.0
+            spike_amp = 180.0
+            motion_mult = 0.5
 
-        # IMU signal: 3-axis accelerometer and gyro
-        ax = 0.02 * math.sin(t) + random.normalvariate(0, 0.01)
-        ay = 0.98 + 0.03 * math.cos(t) + random.normalvariate(0, 0.01)
-        az = 0.05 * math.sin(2 * t) + random.normalvariate(0, 0.01)
-        gx = 1.2 * math.cos(t) + random.normalvariate(0, 0.1)
-        gy = -0.8 * math.sin(t) + random.normalvariate(0, 0.1)
-        gz = 0.5 * math.cos(2 * t) + random.normalvariate(0, 0.1)
+        # PPG signal: ~69-117 BPM cardiac pulse with secondary dicrotic notch wave
+        ppg_base = 80000.0 + ppg_amp * math.sin(2 * math.pi * hr_hz * t) + 4000.0 * math.sin(4 * math.pi * hr_hz * t)
+        ppg_ir = ppg_base + random.normalvariate(0, 250)
+        ppg_red = ppg_base * 0.75 + random.normalvariate(0, 200)
+
+        # GSR signal: ADC baseline with tonic drift + phasic SCR spikes (spikes drop ADC)
+        spike = spike_amp * math.exp(-((t % spike_period) / 1.5)) if (t % spike_period) < 3.0 else 0.0
+        gsr_raw = max(300.0, min(4050.0, raw_gsr_base - spike + random.normalvariate(0, 15)))
+
+        # IMU signal: 3-axis accelerometer and gyro with motion scaling
+        ax = 0.02 * math.sin(t) + random.normalvariate(0, 0.01 * motion_mult)
+        ay = 0.98 + 0.03 * math.cos(t) + random.normalvariate(0, 0.01 * motion_mult)
+        az = 0.05 * math.sin(2 * t) + random.normalvariate(0, 0.01 * motion_mult)
+        gx = (1.2 * math.cos(t) + random.normalvariate(0, 0.1)) * motion_mult
+        gy = (-0.8 * math.sin(t) + random.normalvariate(0, 0.1)) * motion_mult
+        gz = (0.5 * math.cos(2 * t) + random.normalvariate(0, 0.1)) * motion_mult
 
         pkt_ms = int(t * 1000)
         if self.first_packet_ms is None:
@@ -241,6 +293,10 @@ class SerialDataReceiver:
     def _open_serial(self) -> bool:
         """Attempt to open the serial port. Returns True on success."""
         self._close_serial()
+        if not SERIAL_AVAILABLE or serial is None:
+            self.last_error = "PySerial is not available. Please install pyserial or enable Simulated Hardware Mode."
+            self._log(self.last_error)
+            return False
         try:
             self._ser = serial.Serial(
                 self.serial_port_name,
@@ -261,6 +317,9 @@ class SerialDataReceiver:
             # Drain boot messages and look for #HEADER
             deadline = time.time() + 2.0
             while time.time() < deadline:
+                if not self.running or self.simulation_mode:
+                    self._close_serial()
+                    return False
                 if self._ser.in_waiting > 0:
                     line = self._ser.readline().decode("utf-8", errors="ignore").strip()
                     if line.startswith("#HEADER:"):
@@ -341,7 +400,9 @@ class SerialDataReceiver:
         # Exponential backoff: 3s, 6s, 12s... capped at 15s
         backoff = min(config.SERIAL_RECONNECT_SEC * (2 ** (self.reconnect_count - 1)), 15.0)
         self._log(f"Waiting {backoff:.1f}s before next attempt...")
-        time.sleep(backoff)
+        deadline = time.time() + backoff
+        while time.time() < deadline and self.running and not self.simulation_mode:
+            time.sleep(0.1)
 
     # ── CSV Parsing ───────────────────────────────────────────────
 
@@ -476,6 +537,8 @@ class SerialDataReceiver:
         counter = 0
         fps_time = time.time()
         fps_count = 0
+        target_sim_dt = 1.0 / config.SAMPLING_RATE_HZ
+        next_sim_time = time.perf_counter()
 
         while self.running:
             if self.simulation_mode:
@@ -498,7 +561,14 @@ class SerialDataReceiver:
                 if config.API_FORWARD_READINGS and (counter % 5 == 0):
                     self._forward_packet_to_api(packet)
 
-                time.sleep(1.0 / config.SAMPLING_RATE_HZ)
+                # High-precision target-scheduled 25 Hz timing for Windows
+                next_sim_time += target_sim_dt
+                now_perf = time.perf_counter()
+                sleep_sec = next_sim_time - now_perf
+                if sleep_sec > 0.003:
+                    time.sleep(sleep_sec - 0.002)
+                while time.perf_counter() < next_sim_time:
+                    pass
 
                 now = time.time()
                 if now - fps_time >= 1.0:
@@ -645,7 +715,7 @@ class SerialDataReceiver:
             "reconnect_count": self.reconnect_count,
             "rate_hz": self.current_fps,
             "last_packet_time": self.last_packet_time,
-            "last_remote_ip": f"Serial ({self.serial_port_name} @ {self.baud_rate})",
+            "last_remote_ip": "Simulated Hardware (Synthetic Bio-Telemetry)" if self.simulation_mode else f"Serial ({self.serial_port_name} @ {self.baud_rate})",
             "sensor_status": self.sensor_status,
             "last_raw_line": self.last_raw_line,
             "api_endpoint": f"{config.API_BASE_URL}{config.API_READING_ENDPOINT}",

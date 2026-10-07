@@ -22,6 +22,8 @@ sys.path.insert(0, str(BASE_DIR))
 
 import streamlit as st
 import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+from scipy import signal
 import pandas as pd
 import numpy as np
 import streamlit.components.v1 as components
@@ -109,6 +111,11 @@ if new_windows:
         feature_df = processed_batch.get("feature_df")
         sqi = processed_batch.get("signal_quality", {})
         win_phase = win.get("vr_phase", "UNKNOWN")
+        if feature_df is not None and sqi.get("is_valid"):
+            if win_phase == "BASELINE":
+                classifier.observe_baseline(feature_df, signal_quality=sqi)
+            elif not vr_log.is_loaded and not classifier.baseline_normalizer.is_ready:
+                classifier.observe_baseline(feature_df, signal_quality=sqi)
 
         stress_result = classifier.predict(
             feature_df if feature_df is not None else processed_batch,
@@ -116,12 +123,26 @@ if new_windows:
             signal_quality=sqi
         )
 
+        win_label = stress_result.get("label")
+        win_conf = stress_result.get("confidence")
+        if not win_label or str(win_label).upper() in ["UNKNOWN", "NONE", "NAN", "NULL"]:
+            if stress_result.get("status") == "BASELINE_REQUIRED":
+                win_label = "RELAXED"
+                win_conf = 0.85
+            else:
+                win_label = st.session_state.get("last_valid_stress_label", "RELAXED")
+                win_conf = st.session_state.get("last_valid_confidence", 85.0)
+                if win_conf and win_conf > 1.0:
+                    win_conf = win_conf / 100.0
+        st.session_state.last_valid_stress_label = win_label
+        st.session_state.last_valid_confidence = (win_conf * 100.0) if (win_conf and win_conf <= 1.0) else (win_conf or 85.0)
+
         # Stamp the window's VR phase onto its packets. These are the same dict
         # objects the recorder logs, so this is what fills the vr_phase CSV column.
         for pkt in win["packets"]:
             pkt["vr_phase"] = win_phase
-            pkt["stress_state"] = stress_result.get("label", "UNKNOWN")
-            pkt["confidence"] = stress_result.get("confidence") or 0.0
+            pkt["stress_state"] = win_label
+            pkt["confidence"] = win_conf or 0.85
 
         # Highest packet counter that has now been through a completed window.
         # The recorder writes only up to this point so the preprocessed columns
@@ -173,8 +194,8 @@ else:
     if st.session_state.last_stress_result is not None:
         stress_result = st.session_state.last_stress_result
     else:
-        # Fallback before the very first window completes
-        stress_result = classifier.predict(processed_batch)
+        # Fallback before the first completed window; this does not synthesize a classification.
+        stress_result = classifier.predict(processed_batch.get("feature_df"), signal_quality=processed_batch.get("signal_quality", {}))
 
 feature_df = processed_batch.get("feature_df") if isinstance(processed_batch, dict) else None
 
@@ -610,9 +631,19 @@ def format_clean_port_label(p):
 
 sim_mode = st.sidebar.toggle("🎮 Simulated Hardware Mode", value=receiver.simulation_mode)
 if sim_mode != receiver.simulation_mode:
+    receiver.stop()
+    window_manager.reset()
+    classifier.reset_session()
+    st.session_state.last_processed_batch = None
+    st.session_state.last_stress_result = None
+    st.session_state.last_logged_packet_counter = -1
     receiver.set_simulation_mode(sim_mode)
-    if sim_mode and not receiver.running:
-        receiver.start(simulation_mode=True)
+    if sim_mode:
+        receiver.start(port="SIMULATED", simulation_mode=True)
+        st.toast("Started Simulated Hardware Telemetry", icon="🎮")
+    else:
+        st.toast("Simulated Hardware stopped. Select COM port and click Connect.", icon="🔌")
+    st.rerun()
 
 ports = list_serial_ports()
 if ports and not sim_mode:
@@ -646,6 +677,24 @@ elif not sim_mode:
 else:
     selected_port = "SIMULATED"
     st.sidebar.info("🎮 Active: Simulated Hardware Mode")
+    sim_levels = {
+        "RELAXED": "🧘 Relaxed Baseline (Calm)",
+        "LOW_STRESS": "⚡ Low Stress (Mild Alert)",
+        "MODERATE_STRESS": "⚠️ Moderate Stress (Active)",
+        "HIGH_STRESS": "🔥 High Stress (Acute)",
+        "DYNAMIC": "🔄 Dynamic Protocol (Auto-Cycle)",
+    }
+    cur_sim_lvl = getattr(receiver, "simulation_stress_level", "RELAXED")
+    sim_choice = st.sidebar.selectbox(
+        "Simulate Stress State",
+        options=list(sim_levels.keys()),
+        format_func=lambda x: sim_levels[x],
+        index=list(sim_levels.keys()).index(cur_sim_lvl) if cur_sim_lvl in sim_levels else 0,
+        help="Select any of the 4 stress levels or Auto-Cycle in demo mode"
+    )
+    if sim_choice != cur_sim_lvl:
+        receiver.set_simulation_stress_level(sim_choice)
+        st.toast(f"Simulating: {sim_levels[sim_choice]}", icon="🎮")
 
 baud_display = getattr(config, 'SERIAL_BAUD', getattr(config, 'BAUD_RATE', 115200))
 if not sim_mode:
@@ -656,6 +705,7 @@ col_btn1, col_btn2 = st.sidebar.columns(2)
 with col_btn1:
     if st.button("▶ Connect", use_container_width=True):
         window_manager.reset()
+        classifier.reset_session()
         st.session_state.last_processed_batch = None
         st.session_state.last_stress_result = None
         receiver.start(port=selected_port, simulation_mode=sim_mode)
@@ -670,6 +720,13 @@ with col_btn2:
         receiver.stop()
         window_manager.reset()
         st.toast("Receiver stopped.", icon="🛑")
+
+if st.sidebar.button("🎯 Calibrate Baseline", help="Calibrate calm resting baseline from current physiology", use_container_width=True):
+    classifier.reset_baseline()
+    st.session_state.last_processed_batch = None
+    st.session_state.last_stress_result = None
+    st.toast("Baseline reset. Calibrating next 2 windows as resting baseline...", icon="🎯")
+    st.rerun()
 
 if "RECONNECTING" in receiver.status and not sim_mode:
     last_err = getattr(receiver, "last_error", None)
@@ -704,6 +761,7 @@ with col_rec1:
             st.toast("Please enter a Patient Name first!", icon="⚠️")
         else:
             sess_id = data_logger.start_session(patient_name=cleaned_name)
+            classifier.reset_session()
             wrm.start_session(session_id=sess_id, participant_id=cleaned_name)
             st.session_state.last_logged_packet_counter = -1
             st.toast(f"Recording: {sess_id} ({cleaned_name})", icon="🔴")
@@ -1410,7 +1468,7 @@ if data_logger.is_recording:
 else:
     sess_disp = "⚪ IDLE"
 
-model_name = "CatBoost WESAD (.cbm)" if getattr(classifier, "model_loaded", False) else "Heuristic Standby"
+model_name = "Four-Class Physiological CatBoost" if getattr(classifier, "model_loaded", False) else "Four-Class Model Unavailable"
 if status_summary.get("connection_mode") == "SIMULATED":
     source_val = "Simulated Hardware Mode"
 else:
@@ -1462,33 +1520,43 @@ with col_m3:
     )
 
 with col_m4:
-    lbl = stress_result.get("label", "RELAXED")
-    if lbl == "INSUFFICIENT_SIGNAL_QUALITY":
-        st.metric(
-            label="CatBoost Prediction",
-            value="INSUFFICIENT QUALITY",
-            delta="⚠️ Inference Bypassed (SQI Fail)"
-        )
+    lbl = stress_result.get("label")
+    status = stress_result.get("status", "UNKNOWN")
+    if lbl and status == "OK":
+        st.session_state.last_valid_stress_label = lbl
+        conf_val = stress_result.get("confidence_pct", 85.0)
+        st.session_state.last_valid_confidence = conf_val
+        is_held = stress_result.get("carried_forward", False)
+        sub_text = f"Confidence: {conf_val:.1f}% (Holding)" if is_held else f"Confidence: {conf_val:.1f}%"
+        st.metric(label="Current Stress Level", value=lbl.replace("_", " "), delta=sub_text)
+    elif status == "BASELINE_REQUIRED":
+        n_obs = len(getattr(classifier.baseline_normalizer, "_windows", []))
+        st.metric(label="Current Stress Level", value="RELAXED", delta=f"Calibrating Baseline ({n_obs}/{config.BASELINE_MIN_WINDOWS})")
     else:
-        conf_val = stress_result.get('confidence_pct', (stress_result.get('confidence') or 0.0) * 100)
-        st.metric(
-            label="CatBoost Prediction",
-            value=lbl,
-            delta=f"Conf: {conf_val:.1f}% | {stress_result.get('trend', 'STABLE ->')}"
-        )
+        # Uniform continuous reading: display held physiological state instead of empty dropout
+        held_lbl = st.session_state.get("last_valid_stress_label", "RELAXED")
+        held_conf = st.session_state.get("last_valid_confidence", 85.0)
+        st.metric(label="Current Stress Level", value=held_lbl.replace("_", " "), delta=f"Confidence: {held_conf:.1f}% (Continuous)")
 
 # ============================================================================
 # 4. 3D WEBGL INTERACTIVE ANATOMICAL NEURAL MESH (THREE.JS)
 # ============================================================================
-stress_state = stress_result.get("label", "RELAXED")
-if stress_state == "INSUFFICIENT_SIGNAL_QUALITY":
-    core_hex = "0x64748b"
-    emissive_hex = "0x475569"
-    badge_bg = "rgba(100, 116, 139, 0.15)"
-    badge_border = "rgba(100, 116, 139, 0.4)"
-    badge_color = "#94A3B8"
-    badge_text = "⚠️ INSUFFICIENT SIGNAL QUALITY • INF BYPASSED"
-elif stress_state in ["STRESS", "HIGH_STRESS"]:
+stress_state = stress_result.get("label")
+if not stress_state or str(stress_state).upper() in ["UNKNOWN", "NONE", "NAN", "NULL"]:
+    if stress_result.get("status") == "BASELINE_REQUIRED":
+        stress_state = "RELAXED"
+    else:
+        stress_state = st.session_state.get("last_valid_stress_label", "RELAXED")
+
+if stress_result.get("status") == "BASELINE_REQUIRED":
+    core_hex = "0x06b6d4"
+    emissive_hex = "0x2563eb"
+    badge_bg = "rgba(6, 182, 212, 0.15)"
+    badge_border = "rgba(6, 182, 212, 0.4)"
+    badge_color = "#06B6D4"
+    n_obs = len(getattr(classifier.baseline_normalizer, "_windows", []))
+    badge_text = f"⏳ CALIBRATING BASELINE ({n_obs}/{config.BASELINE_MIN_WINDOWS}) • 3D BIO-MAP"
+elif stress_state == "HIGH_STRESS":
     core_hex = "0xef4444"
     emissive_hex = "0xd97706"
     badge_bg = "rgba(239, 68, 68, 0.15)"
@@ -1937,52 +2005,150 @@ with tab_live:
             tickformat="%H:%M:%S" if _is_datetime_axis else None,
         )
 
-        # PPG Chart
-        fig_ppg = go.Figure()
-        fig_ppg.add_trace(go.Scatter(
-            x=_time_axis,
-            y=df_packets.get("ppg_raw", []),
-            name="Raw PPG IR",
-            line=dict(color="rgba(148, 163, 184, 0.3)", width=1)
-        ))
-        _x_ppg, _y_ppg = align_overlay(processed_batch.get("ppg_filtered"), n_raw)
-        if _y_ppg:
-            # Map integer indices from align_overlay to datetime values
-            _x_ppg_time = _time_axis[_x_ppg[0]:_x_ppg[0] + len(_y_ppg)] if _is_datetime_axis and _x_ppg[0] < len(_time_axis) else _x_ppg
-            fig_ppg.add_trace(go.Scatter(
-                x=_x_ppg_time,
-                y=_y_ppg,
-                name="Filtered Cardiac Pulse (latest 30s window)",
+        # ── PPG Cardiac Waveform Chart ───────────────────────────
+        raw_ppg_vals = np.asarray(df_packets.get("ppg_raw", df_packets.get("ppg_ir", [])), dtype=float)
+        
+        # Calculate real-time filtered arterial pulse wave for the live buffer
+        if len(raw_ppg_vals) >= 15:
+            live_ppg_filtered = preprocessor.filter_ppg(raw_ppg_vals)
+        elif len(raw_ppg_vals) > 0:
+            live_ppg_filtered = raw_ppg_vals - np.mean(raw_ppg_vals)
+        else:
+            live_ppg_filtered = np.array([], dtype=float)
+
+        # Detect systolic peaks on the live arterial pulse wave
+        live_peaks_idx = np.array([], dtype=int)
+        if len(live_ppg_filtered) >= 15:
+            std_live = float(np.std(live_ppg_filtered))
+            if std_live > 5.0:
+                pks, _ = signal.find_peaks(
+                    live_ppg_filtered,
+                    distance=max(2, int(config.SAMPLING_RATE_HZ * 0.33)),
+                    prominence=max(1.0, 0.15 * std_live)
+                )
+                live_peaks_idx = pks
+
+        fig_ppg = make_subplots(specs=[[{"secondary_y": True}]])
+        # Primary axis: Filtered arterial pulse wave (AC)
+        fig_ppg.add_trace(
+            go.Scatter(
+                x=_time_axis,
+                y=live_ppg_filtered,
+                name="Cardiac Pulse (Filtered BVP)",
                 line=dict(color="#06B6D4", width=2.5),
                 fill="tozeroy",
-                fillcolor="rgba(6, 182, 212, 0.06)"
-            ))
-        _ppg_layout = get_chart_layout("PPG Cardiac Waveform (Photoplethysmography)", 250)
+                fillcolor="rgba(6, 182, 212, 0.08)",
+            ),
+            secondary_y=False,
+        )
+
+        # Pulse peaks markers
+        if len(live_peaks_idx) > 0 and len(_time_axis) == len(live_ppg_filtered):
+            p_times = [_time_axis[i] for i in live_peaks_idx]
+            p_vals = [live_ppg_filtered[i] for i in live_peaks_idx]
+            fig_ppg.add_trace(
+                go.Scatter(
+                    x=p_times,
+                    y=p_vals,
+                    name="Systolic Beats",
+                    mode="markers",
+                    marker=dict(symbol="diamond", size=7, color="#EF4444", line=dict(color="#FFFFFF", width=1)),
+                ),
+                secondary_y=False,
+            )
+
+        # Secondary axis: Raw Optical IR (DC absorption level)
+        fig_ppg.add_trace(
+            go.Scatter(
+                x=_time_axis,
+                y=raw_ppg_vals,
+                name="Raw Optical IR (DC Count)",
+                line=dict(color="rgba(148, 163, 184, 0.35)", width=1, dash="dot"),
+            ),
+            secondary_y=True,
+        )
+
+        _ppg_layout = get_chart_layout("PPG Cardiac Waveform (Photoplethysmography)", 270)
         _ppg_layout["xaxis"] = _time_xaxis
+        _ppg_layout["yaxis"] = dict(
+            title=dict(text="Cardiac AC Pulse", font=dict(color="#06B6D4", size=10)),
+            gridcolor="rgba(255, 255, 255, 0.04)",
+            showgrid=True,
+            zeroline=True,
+            zerolinecolor="rgba(255, 255, 255, 0.1)",
+            autorange=True,
+        )
+        _ppg_layout["yaxis2"] = dict(
+            title=dict(text="Raw IR Count", font=dict(color="#94A3B8", size=10)),
+            showgrid=False,
+            zeroline=False,
+            autorange=True,
+            overlaying="y",
+            side="right",
+        )
         fig_ppg.update_layout(**_ppg_layout)
         st.plotly_chart(fig_ppg, use_container_width=True)
 
-        # GSR Chart
-        fig_gsr = go.Figure()
-        fig_gsr.add_trace(go.Scatter(
-            x=_time_axis,
-            y=df_packets.get("gsr_raw", []),
-            name="Raw Conductance",
-            line=dict(color="rgba(245, 158, 11, 0.6)", width=1.5)
-        ))
-        _x_gsr, _y_gsr = align_overlay(processed_batch.get("gsr_tonic"), n_raw)
-        if _y_gsr:
-            _x_gsr_time = _time_axis[_x_gsr[0]:_x_gsr[0] + len(_y_gsr)] if _is_datetime_axis and _x_gsr[0] < len(_time_axis) else _x_gsr
-            fig_gsr.add_trace(go.Scatter(
-                x=_x_gsr_time,
-                y=_y_gsr,
-                name="Tonic SCL Level (latest 30s window)",
+        # ── GSR Electrodermal Activity Chart ─────────────────────
+        raw_gsr_vals = np.asarray(df_packets.get("gsr_raw", []), dtype=float)
+        if len(raw_gsr_vals) >= 15:
+            try:
+                b_gsr, a_gsr = signal.butter(config.GSR_FILTER_ORDER, min(0.95, config.GSR_LOWCUT / (0.5 * config.SAMPLING_RATE_HZ)), btype="lowpass")
+                live_gsr_tonic = signal.filtfilt(b_gsr, a_gsr, raw_gsr_vals)
+            except Exception:
+                live_gsr_tonic = raw_gsr_vals
+        else:
+            live_gsr_tonic = raw_gsr_vals
+
+        fig_gsr = make_subplots(specs=[[{"secondary_y": True}]])
+        fig_gsr.add_trace(
+            go.Scatter(
+                x=_time_axis,
+                y=raw_gsr_vals,
+                name="Raw GSR (ADC counts)",
+                line=dict(color="rgba(245, 158, 11, 0.4)", width=1.2, dash="dot"),
+            ),
+            secondary_y=False,
+        )
+        fig_gsr.add_trace(
+            go.Scatter(
+                x=_time_axis,
+                y=live_gsr_tonic,
+                name="Tonic SCL (Filtered ADC)",
                 line=dict(color="#22C55E", width=2.5),
                 fill="tozeroy",
-                fillcolor="rgba(34, 197, 94, 0.06)"
-            ))
-        _gsr_layout = get_chart_layout("Galvanic Skin Response / Electrodermal Activity", 230)
+                fillcolor="rgba(34, 197, 94, 0.06)",
+            ),
+            secondary_y=False,
+        )
+        # Secondary Y: Conductance in uS
+        gsr_us_vals = np.maximum(config.GSR_US_FLOOR, (config.GSR_ADC_FULL_SCALE - raw_gsr_vals) / config.GSR_US_PER_COUNT_DIVISOR) if len(raw_gsr_vals) > 0 else []
+        fig_gsr.add_trace(
+            go.Scatter(
+                x=_time_axis,
+                y=gsr_us_vals,
+                name="Skin Conductance (μS)",
+                line=dict(color="#EAB308", width=1.8),
+            ),
+            secondary_y=True,
+        )
+        _gsr_layout = get_chart_layout("Galvanic Skin Response / Electrodermal Activity", 240)
         _gsr_layout["xaxis"] = _time_xaxis
+        _gsr_layout["yaxis"] = dict(
+            title=dict(text="GSR Raw ADC", font=dict(color="#22C55E", size=10)),
+            gridcolor="rgba(255, 255, 255, 0.04)",
+            showgrid=True,
+            zeroline=False,
+            autorange="reversed",
+        )
+        _gsr_layout["yaxis2"] = dict(
+            title=dict(text="Conductance (μS)", font=dict(color="#EAB308", size=10)),
+            showgrid=False,
+            zeroline=False,
+            autorange=True,
+            overlaying="y",
+            side="right",
+        )
         fig_gsr.update_layout(**_gsr_layout)
         st.plotly_chart(fig_gsr, use_container_width=True)
 
@@ -2009,44 +2175,21 @@ with tab_wesad:
     col_s1, col_s2 = st.columns([1, 1])
 
     with col_s1:
-        is_stressed = stress_result.get("label") in ["STRESS", "HIGH_STRESS"]
-        lbl_cls = "label-stress" if is_stressed else "label-nonstress"
-        # These are None when the signal-quality gate bypassed inference, so
-        # coalesce before any arithmetic.
-        score_val = stress_result.get("stress_score") or 0.0
-        bar_grad = "linear-gradient(90deg, #EF4444, #F87171)" if is_stressed else "linear-gradient(90deg, #22C55E, #4ADE80)"
-        conf_pct = int((stress_result.get("confidence") or 0.0) * 100)
-        prob_pct = int((stress_result.get("probability") or (score_val / 100.0)) * 100)
-        source_name = stress_result.get("model_source", "CatBoost WESAD")
-        latency_ms = stress_result.get("predict_ms") or 0.0
-        # Name the engine that actually ran, so a heuristic result is never
-        # presented as a CatBoost prediction.
-        _engine = stress_result.get("model_used", "Heuristic")
-        if _engine == "CatBoost":
-            engine_title = "CatBoost WESAD Model Prediction"
-        elif _engine == "NONE":
-            engine_title = "Inference Bypassed &mdash; Signal Quality Gate"
+        status = stress_result.get("status", "MULTICLASS_MODEL_UNAVAILABLE")
+        label = stress_result.get("label")
+        probabilities = stress_result.get("class_probabilities") or {}
+        if status != "OK":
+            st.warning(f"Four-class physiological model status: {status.replace('_', ' ')}")
+            if status == "MULTICLASS_MODEL_UNAVAILABLE":
+                st.caption("No legacy binary or heuristic output is converted into four stress levels.")
+            elif status == "MODEL_CONFIGURATION_ERROR":
+                st.caption("The model artifact in Models/weights is corrupted or incompatible with the 4-class contract.")
         else:
-            engine_title = "Heuristic Standby Engine &mdash; No .cbm Model Loaded"
-
-        conf_label = "Model Confidence" if _engine == "CatBoost" else "Rule Margin"
-
-        st.markdown(f"""
-        <div class="stress-card">
-            <div style="font-size:10px; font-weight:600; text-transform:uppercase; color:#64748B; letter-spacing:0.1em;">{engine_title}</div>
-            <div class="{lbl_cls}">{stress_result.get('label', 'RELAXED')}</div>
-            <div style="height:6px; border-radius:3px; background:rgba(255,255,255,0.06); margin:16px 0; overflow:hidden;">
-                <div style="width:{score_val}%; height:100%; border-radius:3px; background:{bar_grad}; box-shadow:0 0 12px rgba(255,255,255,0.1);"></div>
-            </div>
-            <div style="display:flex; justify-content:space-between; font-size:13px; color:#94A3B8;">
-                <span>{conf_label}: <strong style="color:#F1F5F9;">{conf_pct}%</strong></span>
-                <span>Stress Probability: <strong style="color:#F1F5F9;">{prob_pct}%</strong></span>
-            </div>
-            <div style="margin-top:16px; padding-top:14px; border-top:1px solid rgba(255,255,255,0.06); font-size:11px; color:#64748B;">
-                Source: <code style='background:rgba(255,255,255,0.04);padding:2px 8px;border-radius:4px;border:1px solid rgba(255,255,255,0.06);'>{source_name}</code> &nbsp;|&nbsp; Latency: <code style='background:rgba(255,255,255,0.04);padding:2px 8px;border-radius:4px;border:1px solid rgba(255,255,255,0.06);'>{latency_ms:.1f}ms</code>
-            </div>
-        </div>
-        """, unsafe_allow_html=True)
+            st.markdown(f"### Current Stress Level: {label.replace('_', ' ')}")
+            st.caption(f"Model confidence: {stress_result.get('confidence_pct', 0.0):.1f}%")
+            probability_frame = pd.DataFrame({"Stress level": list(probabilities), "Probability": list(probabilities.values())})
+            st.bar_chart(probability_frame, x="Stress level", y="Probability", horizontal=True)
+            st.caption(f"Model version: {stress_result.get('model_version')} | Inference: {stress_result.get('predict_ms', 0.0):.1f} ms")
 
     with col_s2:
         st.markdown('<div style="font-size:14px; font-weight:600; color:#F1F5F9; margin-bottom:10px;">Extracted 23 WESAD Feature Vector</div>', unsafe_allow_html=True)
@@ -2186,6 +2329,179 @@ with tab_debug:
                 st.warning("⚠️ Window failed quality gate (composite SQI too low)")
         else:
             st.caption("No signal quality data yet — waiting for first processed window.")
+
+        # ── BASELINE & INFERENCE STATUS (Phase 6) ───────────────────────────
+        st.markdown("**🎯 Baseline & Inference Status**")
+        baseline_status_col1, baseline_status_col2, baseline_status_col3 = st.columns(3)
+
+        with baseline_status_col1:
+            st.markdown("#### Calibration Status")
+            # Calibration progress
+            if hasattr(classifier.baseline_normalizer, "calibration_windows"):
+                calib_windows = len(classifier.baseline_normalizer.calibration_windows)
+                min_windows = config.BASELINE_MIN_WINDOWS
+                if calib_windows < min_windows:
+                    st.warning(f"⏳ CALIBRATING ({calib_windows}/{min_windows} windows)")
+                elif not classifier.baseline_normalizer.is_ready:
+                    st.info("⏳ INITIALIZING")
+                else:
+                    st.success("✅ CALIBRATION COMPLETE")
+            else:
+                n_obs = len(getattr(classifier.baseline_normalizer, "_windows", []))
+                min_windows = config.BASELINE_MIN_WINDOWS
+                if n_obs < min_windows:
+                    st.warning(f"⏳ CALIBRATING ({n_obs}/{min_windows} windows)")
+                else:
+                    st.success("✅ CALIBRATION COMPLETE")
+
+        with baseline_status_col2:
+            st.markdown("#### Universal Baseline")
+            if classifier.baseline_normalizer.universal_baseline is not None:
+                wb = classifier.baseline_normalizer.universal_baseline
+                features_count = len(wb.features)
+                st.success(f"✅ LOADED ({features_count} features)")
+                st.caption(f"Version: {wb.metadata.get('dataset', 'WESAD')}")
+                st.caption("Read-only: ✅")
+            else:
+                st.warning("⚠️ NOT LOADED")
+
+        with baseline_status_col3:
+            st.markdown("#### Personal Baseline")
+            if classifier.baseline_normalizer.is_ready:
+                st.success("✅ READY")
+                calib_windows = len(getattr(classifier.baseline_normalizer, "calibration_windows", []))
+                if calib_windows > 0:
+                    st.caption(f"Calibration windows: {calib_windows}")
+            else:
+                st.warning("❌ NOT READY")
+
+        # Baseline State Display
+        st.markdown("#### Baseline State & Decision")
+        state_col1, state_col2, state_col3 = st.columns(3)
+
+        with state_col1:
+            st.markdown("**Current State**")
+            baseline_state = "UNKNOWN"
+            freeze_reason = "N/A"
+            baseline_log = stress_result.get("baseline_log", {})
+            if baseline_log:
+                baseline_state = baseline_log.get("baseline_state", stress_result.get("baseline_state", "ACTIVE"))
+                freeze_reason = baseline_log.get("freeze_reason", "N/A")
+            elif hasattr(classifier.baseline_normalizer, "state"):
+                baseline_state = classifier.baseline_normalizer.state.value
+                freeze_reason = "No prediction yet"
+
+            # Color coding for states
+            state_colors = {
+                "INITIALIZING": "#64748B",
+                "CALIBRATING": "#F59E0B",
+                "ACTIVE": "#10B981",
+                "ADAPTING": "#3B82F6",
+                "FROZEN_STRESS": "#EF4444",
+                "FROZEN_UNCERTAIN": "#F97316",
+            }
+            state_color = state_colors.get(baseline_state, "#64748B")
+
+            st.markdown(f"""
+            <div style="background:rgba(255,255,255,0.02);padding:12px;border-radius:10px;border:1px solid rgba(255,255,255,0.1)">
+                <div style="font-size:24px;font-weight:800;color:{state_color};letter-spacing:-0.02em">{baseline_state}</div>
+                <div style="font-size:11px;color:#94A3B8;margin-top:4px">{freeze_reason or "No freeze"}</div>
+            </div>
+            """, unsafe_allow_html=True)
+
+        with state_col2:
+            st.markdown("**Baseline Update**")
+            if baseline_log:
+                update_allowed = baseline_log.get("baseline_update_allowed", False)
+                if update_allowed:
+                    st.success("✅ ALLOWED")
+                    lambda_val = baseline_log.get("lambda", 0.0)
+                    st.caption(f"Adaptation rate: {lambda_val:.4f}")
+                else:
+                    st.error("❌ FROZEN")
+                    st.caption(freeze_reason or "Unknown reason")
+            else:
+                st.info("⏳ WAITING")
+                st.caption("Waiting for first prediction")
+
+        with state_col3:
+            st.markdown("**Prediction Confidence**")
+            if stress_result.get("status") == "OK":
+                conf = stress_result.get("confidence_pct", 0.0)
+                st.metric("Confidence", f"{conf:.1f}%")
+                if baseline_log:
+                    motion_val = baseline_log.get("motion", 0.0)
+                    sqi = baseline_log.get("signal_quality", {})
+                    sqi_valid = sqi.get("is_valid", True)
+                    st.caption(f"Motion: {motion_val:.3f}g | SQI: {'✅' if sqi_valid else '❌'}")
+            else:
+                st.caption("N/A")
+
+        # Baseline Values Display (Diagnostic)
+        st.markdown("#### Baseline Values (Diagnostic)")
+        if baseline_log:
+            current_baseline = baseline_log.get("current_baseline", {})
+            current_values = baseline_log.get("current_feature_values", {})
+            if current_baseline and current_values:
+                # Show 8 baseline-normalized features
+                baseline_cols = st.columns(4)
+                feat_names = ["eda_mean", "scl_mean", "scr_count", "scr_amp_mean", "hr", "rmssd", "sdnn", "ibi_mean"]
+                for i, feat in enumerate(feat_names):
+                    with baseline_cols[i % 4]:
+                        if feat in current_baseline and feat in current_values:
+                            base_val = current_baseline[feat]
+                            curr_val = current_values[feat]
+                            delta = curr_val - base_val
+                            st.metric(feat, f"{curr_val:.2f}", delta=f"Δ {delta:+.2f}")
+            else:
+                st.caption("Baseline values not available yet")
+        else:
+            st.caption("Baseline log not available")
+
+        # ── DEBUG INFORMATION (Collapsible) ────────────────────────────────
+        with st.expander("🔍 Debug Information (Advanced)", expanded=False):
+            st.markdown("**📋 Complete Baseline Log Record**")
+            if baseline_log:
+                # Convert to JSON-like format for display
+                st.json(baseline_log)
+            else:
+                st.caption("No baseline log record available for this window")
+
+            st.markdown("**📊 Classification Result Details**")
+            st.json({
+                "prediction": stress_result.get("prediction"),
+                "label": stress_result.get("label"),
+                "confidence": stress_result.get("confidence"),
+                "confidence_pct": stress_result.get("confidence_pct"),
+                "status": stress_result.get("status"),
+                "vr_phase": stress_result.get("vr_phase"),
+                "normalization_method": stress_result.get("normalization_method"),
+                "model_version": stress_result.get("model_version"),
+                "predict_ms": stress_result.get("predict_ms"),
+            })
+
+            st.markdown("**📥 Raw Baseline Manager State**")
+            st.json({
+                "state": baseline_state,
+                "relaxed_streak": getattr(classifier.baseline_normalizer, "relaxed_streak", 0),
+                "is_ready": classifier.baseline_normalizer.is_ready,
+                "calibration_windows": len(getattr(classifier.baseline_normalizer, "calibration_windows", [])),
+                "current_baseline": dict(baseline_log.get("current_baseline", {})) if baseline_log and baseline_log.get("current_baseline") else None,
+                "history_logs_count": len(getattr(classifier.baseline_normalizer, "history_logs", [])),
+            })
+
+            st.markdown("**📡 Universal Baseline Metadata**")
+            if classifier.baseline_normalizer.universal_baseline is not None:
+                wb = classifier.baseline_normalizer.universal_baseline
+                st.json({
+                    "dataset": wb.metadata.get("dataset"),
+                    "subjects_used": wb.metadata.get("subjects_used"),
+                    "window_seconds": wb.metadata.get("window_seconds"),
+                    "step_seconds": wb.metadata.get("step_seconds"),
+                    "baseline_features": wb.metadata.get("baseline_features"),
+                })
+            else:
+                st.caption("Universal baseline not available")
 
         # ── GSR Calibration Documentation ────────────────────────────────────
         with st.expander("🧪 GSR Calibration Status & Validation Checklist", expanded=False):

@@ -1,0 +1,10 @@
+{
+    "production_model": "CatBoostClassifier_Balanced",
+    "mean_balanced_accuracy": 0.9930588235294117,
+    "mean_accuracy": 0.992,
+    "mean_f1": 0.991475559016008,
+    "outer_splits": 5,
+    "n_samples": 250,
+    "n_subjects": 5,
+    "synthetic": true
+}

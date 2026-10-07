@@ -1,0 +1,57 @@
+{
+  "task": "physiological_stress_multiclass",
+  "label_mode": "multiclass",
+  "classes": [
+    0,
+    1,
+    2,
+    3
+  ],
+  "class_mapping": {
+    "0": "RELAXED",
+    "1": "LOW_STRESS",
+    "2": "MODERATE_STRESS",
+    "3": "HIGH_STRESS"
+  },
+  "feature_version": "physiological_features_v3",
+  "feature_columns": [
+    "eda_mean",
+    "eda_std",
+    "eda_slope",
+    "scl_mean",
+    "phasic_mean",
+    "scr_count",
+    "scr_amp_mean",
+    "scr_rise_mean",
+    "scr_recovery_mean",
+    "hr",
+    "rmssd",
+    "sdnn",
+    "pnn50",
+    "ibi_mean",
+    "ibi_std",
+    "imu_mag_mean",
+    "imu_mag_std",
+    "imu_energy",
+    "imu_jerk_mean",
+    "imu_jerk_std",
+    "imu_var_x",
+    "imu_var_y",
+    "imu_var_z"
+  ],
+  "feature_count": 23,
+  "window_duration_seconds": 30.0,
+  "window_step_seconds": 15.0,
+  "normalization_method": "subject_baseline_delta_selected_features",
+  "baseline_normalized_features": [
+    "eda_mean",
+    "scl_mean",
+    "scr_count",
+    "scr_amp_mean",
+    "hr",
+    "rmssd",
+    "sdnn",
+    "ibi_mean"
+  ],
+  "selected_sensor_stream": "wrist_empatica_e4"
+}

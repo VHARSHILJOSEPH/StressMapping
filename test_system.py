@@ -212,11 +212,11 @@ def test_signal_quality_hard_gating():
     dummy_features = pd.DataFrame([{col: 0.0 for col in config.FEATURE_COLS}])
     res_invalid = classifier.predict(dummy_features, signal_quality=invalid_sqi)
 
-    assert res_invalid["label"] == "INSUFFICIENT_SIGNAL_QUALITY", f"Expected INSUFFICIENT_SIGNAL_QUALITY, got {res_invalid['label']}"
+    assert res_invalid["status"] == "INSUFFICIENT_SIGNAL_QUALITY", f"Expected INSUFFICIENT_SIGNAL_QUALITY, got {res_invalid['status']}"
     assert res_invalid["prediction"] is None, f"Expected prediction None, got {res_invalid['prediction']}"
-    assert res_invalid["probability"] is None, f"Expected probability None, got {res_invalid['probability']}"
+    assert res_invalid["class_probabilities"] is None, f"Expected class_probabilities None, got {res_invalid['class_probabilities']}"
     assert res_invalid["confidence"] is None, f"Expected confidence None, got {res_invalid['confidence']}"
-    assert res_invalid["model_used"] == "NONE", f"Expected model_used NONE, got {res_invalid['model_used']}"
+    assert res_invalid["model_source"] == "NONE", f"Expected model_source NONE, got {res_invalid['model_source']}"
     print("  [OK] Invalid SQI test: CatBoost bypassed, returned INSUFFICIENT_SIGNAL_QUALITY with None prediction.")
 
     valid_sqi = {
@@ -228,11 +228,14 @@ def test_signal_quality_hard_gating():
     }
 
     res_valid = classifier.predict(dummy_features, signal_quality=valid_sqi)
-    assert res_valid["label"] != "INSUFFICIENT_SIGNAL_QUALITY"
-    assert res_valid["prediction"] in [0, 1]
-    assert res_valid["confidence"] is not None
-    assert res_valid["model_used"] in ["CatBoost", "Heuristic"]
-    print(f"  [OK] Valid SQI test: Model executed ({res_valid['model_used']}), label={res_valid['label']}, conf={res_valid['confidence']}")
+    assert res_valid["status"] in ["OK", "MULTICLASS_MODEL_UNAVAILABLE", "BASELINE_REQUIRED"]
+    if res_valid["status"] == "OK":
+        assert res_valid["prediction"] in config.STRESS_CLASS_IDS
+        assert res_valid["confidence"] is not None
+        assert set(res_valid["class_probabilities"]) == set(config.STRESS_CLASS_NAMES)
+    else:
+        assert res_valid["prediction"] is None
+    print(f"  [OK] Valid SQI test: status={res_valid['status']}, label={res_valid['label']}")
 
 
 def test_priority_6_wording_and_disclaimer_consistency():
@@ -266,8 +269,9 @@ def test_priority_6_wording_and_disclaimer_consistency():
                 assert phrase not in content, f"Obsolete phrase '{phrase}' found in {file_path.name}!"
 
     for file_path in [BASE_DIR / "report_generator.py", BASE_DIR / "desktop_app" / "report_generator.py"]:
-        content = file_path.read_text(encoding="utf-8")
-        assert mandatory_disclaimer in content, f"Mandatory disclaimer missing in {file_path.name}!"
+        content = file_path.read_text(encoding="utf-8").lower()
+        assert "non-clinical" in content, f"Missing 'non-clinical' in {file_path.name}!"
+        assert "not a medical diagnosis" in content or "does not constitute a medical" in content, f"Missing medical diagnosis disclaimer in {file_path.name}!"
 
     print("  [OK] Stale phrasing verification passed: '60-second Non-Overlapping' and '80 BPM Threshold' removed.")
     print("  [OK] Mandatory non-clinical disclaimer verified in all report generator templates.")
@@ -339,8 +343,8 @@ def test_full_pipeline():
 
     classifier = StressClassifier()
     result = classifier.predict(processed["feature_df"], vr_phase="BASELINE", signal_quality=processed["signal_quality"])
-    assert result["label"] in ["RELAXED", "LOW_STRESS", "MODERATE_STRESS", "HIGH_STRESS", "INSUFFICIENT_SIGNAL_QUALITY"]
-    print(f"  [OK] State={result['label']}, Score={result['stress_score']}%, Conf={result['confidence_pct']}%, VR Phase={result['vr_phase']}")
+    assert result["status"] in ["OK", "MULTICLASS_MODEL_UNAVAILABLE", "BASELINE_REQUIRED", "INSUFFICIENT_SIGNAL_QUALITY"]
+    print(f"  [OK] State={result['label']}, Status={result['status']}, Conf={result['confidence_pct']}, VR Phase={result['vr_phase']}")
 
     # 11. Test Data Logger with Sampling Diagnostics
     print("\n[11/12] Testing CSV Data Logger with Sampling Diagnostics...")

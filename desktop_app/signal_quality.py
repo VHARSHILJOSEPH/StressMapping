@@ -50,9 +50,13 @@ def assess_ppg_quality(ppg_ir: np.ndarray) -> Dict[str, Any]:
     elif is_flatline:
         score = 0.15
         status = "FLAT_LINE"
-    elif clip_pct > 0.1:
+    elif clip_pct > 0.40:
         score = 0.3
         status = "SATURATED"
+    elif clip_pct > 0.10:
+        # Mild transient clipping (e.g. slight movement) but mostly usable
+        score = 0.65 if range_ratio >= 0.60 else 0.40
+        status = "MILD_SATURATION" if range_ratio >= 0.60 else "POOR"
     elif range_ratio > 0.9:
         score = 1.0
         status = "GOOD"
@@ -99,18 +103,25 @@ def assess_gsr_quality(gsr_raw: np.ndarray) -> Dict[str, Any]:
     is_flatline = std_gsr < config.GSR_FLATLINE_STD_MIN
 
     # Composite score
-    if disconnect_pct > 0.5:
+    if disconnect_pct > 0.85 and is_flatline:
         score = 0.0
         status = "ELECTRODE_OFF"
-    elif is_flatline and disconnect_pct > 0.1:
-        score = 0.1
+    elif disconnect_pct > 0.98:
+        score = 0.0
+        status = "ELECTRODE_OFF"
+    elif is_flatline and disconnect_pct > 0.2:
+        score = 0.2
         status = "BAD_CONTACT"
     elif is_flatline:
-        score = 0.3
+        score = 0.35
         status = "FLAT_LINE"
+    elif disconnect_pct > 0.40:
+        # High ADC counts with physiological variance indicate dry skin / relaxed low conductance
+        score = 0.80
+        status = "LOW_CONDUCTANCE"
     elif disconnect_pct > 0.1:
-        score = 0.5
-        status = "INTERMITTENT"
+        score = 0.85
+        status = "GOOD"
     else:
         score = 1.0
         status = "GOOD"

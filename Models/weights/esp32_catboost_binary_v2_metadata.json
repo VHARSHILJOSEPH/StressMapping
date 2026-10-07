@@ -1,0 +1,19 @@
+{
+    "model_name": "esp32_catboost_binary_v2",
+    "production_model": "CatBoostClassifier_Balanced",
+    "decision_threshold": 0.05,
+    "best_threshold": 0.05,
+    "threshold": 0.05,
+    "feature_version": "esp32_features_v2",
+    "label_mode": "binary",
+    "positive_class": 1,
+    "classes": [
+        0,
+        1
+    ],
+    "smoothing_window": 3,
+    "decision_threshold_source": "dev-validation (no outer-test leakage)",
+    "calibration_source": "dev-validation (no outer-test leakage)",
+    "best_iteration": 1499,
+    "random_seed": 42
+}

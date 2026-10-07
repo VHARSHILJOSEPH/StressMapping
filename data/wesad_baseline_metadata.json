@@ -1,0 +1,17 @@
+{
+    "dataset": "WESAD",
+    "subjects_used": 15,
+    "baseline_label": 1,
+    "baseline_selection": "WESAD neutral/baseline periods",
+    "window_seconds": 30,
+    "step_seconds": 15,
+    "eda_sampling_rate": 4,
+    "bvp_sampling_rate": 64,
+    "acc_sampling_rate": 32,
+    "baseline_features": 25,
+    "aggregation": "subject median followed by population median",
+    "population_scale": "MAD",
+    "normalization": "robust population z-score",
+    "personal_calibration_required": true,
+    "baseline_update_during_session": false
+}

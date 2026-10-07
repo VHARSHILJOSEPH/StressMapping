@@ -1,0 +1,428 @@
+{
+  "accuracy": 1.0,
+  "macro_precision": 1.0,
+  "macro_recall": 1.0,
+  "macro_f1": 1.0,
+  "weighted_f1": 1.0,
+  "per_class": {
+    "RELAXED": {
+      "precision": 1.0,
+      "recall": 1.0,
+      "f1": 1.0,
+      "support": 75
+    },
+    "LOW_STRESS": {
+      "precision": 1.0,
+      "recall": 1.0,
+      "f1": 1.0,
+      "support": 75
+    },
+    "MODERATE_STRESS": {
+      "precision": 1.0,
+      "recall": 1.0,
+      "f1": 1.0,
+      "support": 75
+    },
+    "HIGH_STRESS": {
+      "precision": 1.0,
+      "recall": 1.0,
+      "f1": 1.0,
+      "support": 75
+    }
+  },
+  "confusion_matrix": [
+    [
+      75,
+      0,
+      0,
+      0
+    ],
+    [
+      0,
+      75,
+      0,
+      0
+    ],
+    [
+      0,
+      0,
+      75,
+      0
+    ],
+    [
+      0,
+      0,
+      0,
+      75
+    ]
+  ],
+  "roc_auc_ovr_macro": 1.0,
+  "predicted_class_distribution": {
+    "RELAXED": {
+      "count": 75,
+      "percentage": 25.0
+    },
+    "LOW_STRESS": {
+      "count": 75,
+      "percentage": 25.0
+    },
+    "MODERATE_STRESS": {
+      "count": 75,
+      "percentage": 25.0
+    },
+    "HIGH_STRESS": {
+      "count": 75,
+      "percentage": 25.0
+    }
+  },
+  "true_class_distribution": {
+    "RELAXED": {
+      "count": 75,
+      "percentage": 25.0
+    },
+    "LOW_STRESS": {
+      "count": 75,
+      "percentage": 25.0
+    },
+    "MODERATE_STRESS": {
+      "count": 75,
+      "percentage": 25.0
+    },
+    "HIGH_STRESS": {
+      "count": 75,
+      "percentage": 25.0
+    }
+  },
+  "fold_metrics": [
+    {
+      "accuracy": 1.0,
+      "macro_precision": 1.0,
+      "macro_recall": 1.0,
+      "macro_f1": 1.0,
+      "weighted_f1": 1.0,
+      "per_class": {
+        "RELAXED": {
+          "precision": 1.0,
+          "recall": 1.0,
+          "f1": 1.0,
+          "support": 15
+        },
+        "LOW_STRESS": {
+          "precision": 1.0,
+          "recall": 1.0,
+          "f1": 1.0,
+          "support": 15
+        },
+        "MODERATE_STRESS": {
+          "precision": 1.0,
+          "recall": 1.0,
+          "f1": 1.0,
+          "support": 15
+        },
+        "HIGH_STRESS": {
+          "precision": 1.0,
+          "recall": 1.0,
+          "f1": 1.0,
+          "support": 15
+        }
+      },
+      "confusion_matrix": [
+        [
+          15,
+          0,
+          0,
+          0
+        ],
+        [
+          0,
+          15,
+          0,
+          0
+        ],
+        [
+          0,
+          0,
+          15,
+          0
+        ],
+        [
+          0,
+          0,
+          0,
+          15
+        ]
+      ],
+      "roc_auc_ovr_macro": 1.0,
+      "fold": 1,
+      "test_subjects": [
+        "S01"
+      ]
+    },
+    {
+      "accuracy": 1.0,
+      "macro_precision": 1.0,
+      "macro_recall": 1.0,
+      "macro_f1": 1.0,
+      "weighted_f1": 1.0,
+      "per_class": {
+        "RELAXED": {
+          "precision": 1.0,
+          "recall": 1.0,
+          "f1": 1.0,
+          "support": 15
+        },
+        "LOW_STRESS": {
+          "precision": 1.0,
+          "recall": 1.0,
+          "f1": 1.0,
+          "support": 15
+        },
+        "MODERATE_STRESS": {
+          "precision": 1.0,
+          "recall": 1.0,
+          "f1": 1.0,
+          "support": 15
+        },
+        "HIGH_STRESS": {
+          "precision": 1.0,
+          "recall": 1.0,
+          "f1": 1.0,
+          "support": 15
+        }
+      },
+      "confusion_matrix": [
+        [
+          15,
+          0,
+          0,
+          0
+        ],
+        [
+          0,
+          15,
+          0,
+          0
+        ],
+        [
+          0,
+          0,
+          15,
+          0
+        ],
+        [
+          0,
+          0,
+          0,
+          15
+        ]
+      ],
+      "roc_auc_ovr_macro": 1.0,
+      "fold": 2,
+      "test_subjects": [
+        "S02"
+      ]
+    },
+    {
+      "accuracy": 1.0,
+      "macro_precision": 1.0,
+      "macro_recall": 1.0,
+      "macro_f1": 1.0,
+      "weighted_f1": 1.0,
+      "per_class": {
+        "RELAXED": {
+          "precision": 1.0,
+          "recall": 1.0,
+          "f1": 1.0,
+          "support": 15
+        },
+        "LOW_STRESS": {
+          "precision": 1.0,
+          "recall": 1.0,
+          "f1": 1.0,
+          "support": 15
+        },
+        "MODERATE_STRESS": {
+          "precision": 1.0,
+          "recall": 1.0,
+          "f1": 1.0,
+          "support": 15
+        },
+        "HIGH_STRESS": {
+          "precision": 1.0,
+          "recall": 1.0,
+          "f1": 1.0,
+          "support": 15
+        }
+      },
+      "confusion_matrix": [
+        [
+          15,
+          0,
+          0,
+          0
+        ],
+        [
+          0,
+          15,
+          0,
+          0
+        ],
+        [
+          0,
+          0,
+          15,
+          0
+        ],
+        [
+          0,
+          0,
+          0,
+          15
+        ]
+      ],
+      "roc_auc_ovr_macro": 1.0,
+      "fold": 3,
+      "test_subjects": [
+        "S03"
+      ]
+    },
+    {
+      "accuracy": 1.0,
+      "macro_precision": 1.0,
+      "macro_recall": 1.0,
+      "macro_f1": 1.0,
+      "weighted_f1": 1.0,
+      "per_class": {
+        "RELAXED": {
+          "precision": 1.0,
+          "recall": 1.0,
+          "f1": 1.0,
+          "support": 15
+        },
+        "LOW_STRESS": {
+          "precision": 1.0,
+          "recall": 1.0,
+          "f1": 1.0,
+          "support": 15
+        },
+        "MODERATE_STRESS": {
+          "precision": 1.0,
+          "recall": 1.0,
+          "f1": 1.0,
+          "support": 15
+        },
+        "HIGH_STRESS": {
+          "precision": 1.0,
+          "recall": 1.0,
+          "f1": 1.0,
+          "support": 15
+        }
+      },
+      "confusion_matrix": [
+        [
+          15,
+          0,
+          0,
+          0
+        ],
+        [
+          0,
+          15,
+          0,
+          0
+        ],
+        [
+          0,
+          0,
+          15,
+          0
+        ],
+        [
+          0,
+          0,
+          0,
+          15
+        ]
+      ],
+      "roc_auc_ovr_macro": 1.0,
+      "fold": 4,
+      "test_subjects": [
+        "S04"
+      ]
+    },
+    {
+      "accuracy": 1.0,
+      "macro_precision": 1.0,
+      "macro_recall": 1.0,
+      "macro_f1": 1.0,
+      "weighted_f1": 1.0,
+      "per_class": {
+        "RELAXED": {
+          "precision": 1.0,
+          "recall": 1.0,
+          "f1": 1.0,
+          "support": 15
+        },
+        "LOW_STRESS": {
+          "precision": 1.0,
+          "recall": 1.0,
+          "f1": 1.0,
+          "support": 15
+        },
+        "MODERATE_STRESS": {
+          "precision": 1.0,
+          "recall": 1.0,
+          "f1": 1.0,
+          "support": 15
+        },
+        "HIGH_STRESS": {
+          "precision": 1.0,
+          "recall": 1.0,
+          "f1": 1.0,
+          "support": 15
+        }
+      },
+      "confusion_matrix": [
+        [
+          15,
+          0,
+          0,
+          0
+        ],
+        [
+          0,
+          15,
+          0,
+          0
+        ],
+        [
+          0,
+          0,
+          15,
+          0
+        ],
+        [
+          0,
+          0,
+          0,
+          15
+        ]
+      ],
+      "roc_auc_ovr_macro": 1.0,
+      "fold": 5,
+      "test_subjects": [
+        "S05"
+      ]
+    }
+  ],
+  "loso_accuracy_mean": 1.0,
+  "loso_accuracy_std": 0.0,
+  "loso_macro_precision_mean": 1.0,
+  "loso_macro_precision_std": 0.0,
+  "loso_macro_recall_mean": 1.0,
+  "loso_macro_recall_std": 0.0,
+  "loso_macro_f1_mean": 1.0,
+  "loso_macro_f1_std": 0.0,
+  "loso_weighted_f1_mean": 1.0,
+  "loso_weighted_f1_std": 0.0
+}

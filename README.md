@@ -7,15 +7,26 @@ A robust, real-time bio-telemetry telemetry and stress mapping platform combinin
 ## 📁 Repository Structure
 
 ```
-├── Firmware/
-│   └── esp32_fixed.ino         # Optimized non-blocking ESP32 firmware
-├── Python/
-│   └── app.py                  # Python telemetry reader, normalizer, & filter
+├── esp32_firmware/
+│   └── esp32_stress_monitor.ino
+├── desktop_app/
+│   ├── receiver.py
+│   ├── preprocessing.py
+│   ├── model_inference.py
+│   ├── ml_contract.py
+│   ├── session_analysis.py
+│   ├── signal_quality.py
+│   ├── windowing.py
+│   └── ...
+├── dashboard/
+│   └── streamlit_app.py
 ├── Models/
-│   └── weights/                # Directory for trained ML model weights (.cbm, .pkl)
-├── Data/
-│   └── logs/                   # Directory for logged telemetry data
-└── README.md                   # Complete system documentation
+│   ├── weights/
+│   └── Traning/
+├── tests/
+├── config.py
+├── train_model.py
+└── README.md
 ```
 
 ---
@@ -45,16 +56,16 @@ A robust, real-time bio-telemetry telemetry and stress mapping platform combinin
 - ✔ **Common Ground**: Ensure a single, common GND plane across all modules and the ESP32.
 - ✔ **USB-C Direct Supply**: Power the system directly via USB-C to the ESP32. Avoid powering sensors from separate external supplies unless grounds are explicitly tied together.
 - ⚡ **I²C Pull-Up Resistors**: Only **one set** of I²C pull-up resistors should exist on the bus. If the MAX30102, MPU6050, and OLED breakout boards already feature onboard pull-ups, **do not** add external 4.7kΩ resistors.
-- 📏 **Jumper Wires**: Keep SDA lines together and SCL lines together. Ensure total jumper wire length is **< 20 cm** to minimize parasitic capacitance on the 400kHz I²C bus.
+- 📏 **Jumper Wires**: Keep SDA lines together and SCL lines together. Ensure total jumper wire length is **< 20 cm** to minimize parasitic capacitance on the 100kHz I²C bus.
 
 ---
 
-## 💻 2. ESP32 Firmware Highlights (`Firmware/esp32_fixed.ino`)
+## 💻 2. ESP32 Firmware Highlights (`esp32_firmware/esp32_stress_monitor.ino`)
 
 1. **Proper I²C & ADC Initialization**:
    ```cpp
    Wire.begin(21, 22);
-   Wire.setClock(400000);
+   Wire.setClock(100000);
    delay(100);
 
    analogReadResolution(12);
@@ -73,18 +84,16 @@ A robust, real-time bio-telemetry telemetry and stress mapping platform combinin
    ```
    *If any critical sensor fails to initialize, the system prints `ERROR` and halts execution (`while(1)`).*
 
-3. **Non-Blocking Multi-Rate Sampling (No `delay()` in Loop)**:
-   - **IMU**: 100 Hz (10 ms period)
-   - **PPG**: 25 Hz (40 ms period)
-   - **GSR**: 50 Hz (20 ms period)
+3. **Non-Blocking Sampling (No `delay()` in Loop)**:
+   - **Unified Sampling Rate**: 25 Hz (40 ms period) across all sensors (IMU, PPG, GSR).
 
-4. **16-Sample GSR Noise Averaging**:
+4. **8-Sample GSR Noise Averaging**:
    ```cpp
    int sum = 0;
-   for (int i = 0; i < 16; i++) {
+   for (int i = 0; i < 8; i++) {
        sum += analogRead(34);
    }
-   gsr = sum / 16;
+   gsr = sum / 8;
    ```
 
 5. **MAX30102 Setup & Warmup**:
@@ -92,16 +101,16 @@ A robust, real-time bio-telemetry telemetry and stress mapping platform combinin
    - Discards readings for the first **3 seconds** after power-up while optics stabilize.
 
 6. **MPU6050 Ranges**:
-   - Accelerometer: `MPU6050_RANGE_4_G` ($\pm 4\text{g}$)
-   - Gyroscope: `MPU6050_RANGE_500_DEG` ($\pm 500^\circ/\text{s}$)
+   - Accelerometer: `MPU6050_RANGE_2_G` ($\pm 2\text{g}$)
+   - Gyroscope: `MPU6050_RANGE_250_DEG` ($\pm 250^\circ/\text{s}$)
    - DLPF Bandwidth: `MPU6050_BAND_21_HZ`
 
 7. **Unified Telemetry CSV Line Output**:
    Outputs store-then-print telemetry per cycle:
    ```
-   millis, gsr, ax, ay, az, gx, gy, gz, ir, red
+   packet_counter,timestamp_ms,gsr,ax,ay,az,gx,gy,gz,ir,red
    ```
-   Example: `12450,1850,-0.12,0.98,9.81,0.01,-0.02,0.00,145200,148900`
+   Example: `1,12450,1850,-0.12,0.98,9.81,0.01,-0.02,0.00,145200,148900`
 
 ---
 
@@ -121,6 +130,17 @@ A robust, real-time bio-telemetry telemetry and stress mapping platform combinin
 
 ---
 
+## 🤖 3.5 Machine Learning Pipeline
+
+- **Model**: CatBoost Multiclass Classifier (`loss_function=MultiClass`)
+- **Input**: Multimodal physiological feature fusion (23 features from EDA + PPG/HRV + IMU)
+- **Output**: Four-class stress prediction (RELAXED, LOW_STRESS, MODERATE_STRESS, HIGH_STRESS)
+- **Windowing**: 30-second windows with 15-second step
+- **Session Aggregation**: Mean probability across valid windows → argmax
+- **Artifacts**: `stress_multiclass.cbm`, `scaler.pkl`, `model_metadata.json`
+
+---
+
 ## ⚠️ 4. Electrical Safety Precautions
 
 > [!CAUTION]
@@ -133,11 +153,11 @@ A robust, real-time bio-telemetry telemetry and stress mapping platform combinin
 
 ## ✅ 5. Priority Checklist (Most Important Implementation Rules)
 
-- [x] **I²C Clock & Pins**: `Wire.begin(21, 22)` and `Wire.setClock(400000)`.
+- [x] **I²C Clock & Pins**: `Wire.begin(21, 22)` and `Wire.setClock(100000)`.
 - [x] **Sequential Sensor Verification**: Initialize sensors step-by-step and check every `begin()` return code.
 - [x] **ADC Setup**: Configure GPIO34 as a 12-bit ADC with `ADC_11db` attenuation.
 - [x] **Non-Blocking Loop**: Zero `delay()` calls in the telemetry loop; use `millis()` timers.
-- [x] **GSR Averaging**: Average 16 GSR ADC reads per sample cycle.
+- [x] **GSR Averaging**: Average 8 GSR ADC reads per sample cycle.
 - [x] **Single CSV Stream**: Output one CSV line per sample cycle with all metrics.
 - [x] **Error Handling**: Print clear initialization status (`OK` / `ERROR`) and halt execution if critical setup fails.
 - [x] **Short I²C Wiring**: Keep SDA/SCL lines short ($< 20\text{ cm}$) with only one set of pull-up resistors.

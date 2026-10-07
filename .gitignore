@@ -13,21 +13,23 @@ env/
 .env.*
 !.env.example
 
-# Generated data
-data/*.csv
-data/*.json
-data/logs/
-
-# Generated reports
-reports/*.html
-reports/*.json
-reports/*.md
-reports/*.pdf
-
-# Temporary files
+# Temporary and scratch files
 temp_*.py
 found_3d.txt
 blob_*.py
+wesad-cat boost.ipynb/
+
+# Generated runtime data & logs
+data/logs/
+data/*_*.csv
+data/*_*.json
+!data/training_manifest.csv
+!data/training_metadata.json
+!data/wesad_baseline_metadata.json
+!data/wesad_universal_baseline.json
+
+# Generated reports
+reports/
 
 # IDE
 .vscode/

@@ -1,0 +1,127 @@
+{
+    "hr": {
+        "median": 71.11111,
+        "mad": 6.02637,
+        "n_subjects": 15
+    },
+    "hr_std": {
+        "median": 21.78541,
+        "mad": 1.56243,
+        "n_subjects": 15
+    },
+    "rmssd": {
+        "median": 273.19306,
+        "mad": 43.26988,
+        "n_subjects": 15
+    },
+    "sdnn": {
+        "median": 200.24456,
+        "mad": 30.42232,
+        "n_subjects": 15
+    },
+    "pnn50": {
+        "median": 68.375,
+        "mad": 8.13194,
+        "n_subjects": 15
+    },
+    "ibi_mean": {
+        "median": 837.05357,
+        "mad": 32.36607,
+        "n_subjects": 15
+    },
+    "ibi_std": {
+        "median": 197.0909,
+        "mad": 28.81638,
+        "n_subjects": 15
+    },
+    "ibi_min": {
+        "median": 421.875,
+        "mad": 31.25,
+        "n_subjects": 15
+    },
+    "ibi_max": {
+        "median": 1328.125,
+        "mad": 78.125,
+        "n_subjects": 15
+    },
+    "eda_mean": {
+        "median": 0.40082,
+        "mad": 0.25689,
+        "n_subjects": 15
+    },
+    "eda_std": {
+        "median": 0.00808,
+        "mad": 0.00491,
+        "n_subjects": 15
+    },
+    "eda_min": {
+        "median": 0.38375,
+        "mad": 0.24959,
+        "n_subjects": 15
+    },
+    "eda_max": {
+        "median": 0.42533,
+        "mad": 0.27258,
+        "n_subjects": 15
+    },
+    "eda_range": {
+        "median": 0.02947,
+        "mad": 0.01211,
+        "n_subjects": 15
+    },
+    "eda_slope": {
+        "median": -6e-05,
+        "mad": 7e-05,
+        "n_subjects": 15
+    },
+    "scl_mean": {
+        "median": 0.40108,
+        "mad": 0.25715,
+        "n_subjects": 15
+    },
+    "phasic_mean": {
+        "median": -4e-05,
+        "mad": 4e-05,
+        "n_subjects": 15
+    },
+    "phasic_std": {
+        "median": 0.00319,
+        "mad": 0.00088,
+        "n_subjects": 15
+    },
+    "scr_count": {
+        "median": 24.0,
+        "mad": 5.0,
+        "n_subjects": 15
+    },
+    "scr_amp_mean": {
+        "median": 0.00421,
+        "mad": 0.00097,
+        "n_subjects": 15
+    },
+    "scr_rise_mean": {
+        "median": 0.46212,
+        "mad": 0.01865,
+        "n_subjects": 15
+    },
+    "scr_recovery_mean": {
+        "median": 2.5,
+        "mad": 0.77273,
+        "n_subjects": 15
+    },
+    "acc_magnitude_mean": {
+        "median": 63.23024,
+        "mad": 0.33489,
+        "n_subjects": 15
+    },
+    "acc_magnitude_std": {
+        "median": 1.5012,
+        "mad": 0.67946,
+        "n_subjects": 15
+    },
+    "acc_magnitude_energy": {
+        "median": 4001.6526,
+        "mad": 45.3276,
+        "n_subjects": 15
+    }
+}

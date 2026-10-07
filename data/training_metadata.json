@@ -1,0 +1,24 @@
+{
+  "dataset_name": "Calibrated_Four_Class_Physiological_Benchmark",
+  "dataset_version": "v1.0",
+  "label_schema_version": "v1.0",
+  "label_provenance": "calibrated_autonomic_psychophysiology",
+  "sensor_stream": "esp32",
+  "window_duration_seconds": 30.0,
+  "window_step_seconds": 15.0,
+  "sampling_rates_hz": {
+    "eda_hz": 25.0,
+    "ppg_hz": 25.0,
+    "imu_hz": 25.0
+  },
+  "normalization_method": "subject_baseline_delta_selected_features",
+  "approved_for_training": true,
+  "subject_count": 5,
+  "total_windows": 300,
+  "class_counts": {
+    "0": 75,
+    "1": 75,
+    "2": 75,
+    "3": 75
+  }
+}
